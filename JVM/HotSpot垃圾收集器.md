@@ -2,9 +2,12 @@
 
 HotSpot 虚拟机提供了多种垃圾收集器，每种收集器都有各自的特点，虽然我们要对各个收集器进行比较，但并非为了挑选出一个最好的收集器。我们选择的只是对具体应用最合适的收集器。
 
-## 新生代垃圾收集器
+- CMS和G1回收的过程，从响应和吞吐量来看，G1有什么优势？
+- G1解决了什么问题？说一说详细的内部过程？
 
-### Serial 垃圾收集器（单线程）
+## 1新生代垃圾收集器
+
+### 1.1Serial 垃圾收集器（单线程）
 
 只开启**一条** GC 线程进行垃圾回收，并且在垃圾收集过程中停止一切用户线程\(Stop The World\)。
 
@@ -13,7 +16,7 @@ HotSpot 虚拟机提供了多种垃圾收集器，每种收集器都有各自的
 由于 Serial 收集器只使用一条 GC 线程，避免了线程切换的开销，从而简单高效。 
 ![3f94897d49934c0d10fcf641f2ea9398](HotSpot垃圾收集器.resources/9790224E-BF78-4E47-A73D-94EC5845A554.png)
 
-### ParNew 垃圾收集器（多线程）
+### 1.2ParNew 垃圾收集器（多线程）
 
 
 ParNew 是 Serial 的多线程版本。由多条 GC 线程并行地进行垃圾清理。但清理过程依然需要 Stop The World。
@@ -23,7 +26,7 @@ ParNew 追求“**低停顿时间**”,与 Serial 唯一区别就是使用了多
 ![03e2a048077b12ff86e8e71c51d0e2c8](HotSpot垃圾收集器.resources/B8252EDC-045D-4565-AAF7-64C729EDE03D.png)
 
 
-### Parallel Scavenge 垃圾收集器（多线程）
+### 1.3Parallel Scavenge 垃圾收集器（多线程）
 
 Parallel Scavenge 和 ParNew 一样，都是多线程、新生代垃圾收集器。但是两者有巨大的不同点：
 
@@ -38,17 +41,17 @@ Parallel Scavenge 和 ParNew 一样，都是多线程、新生代垃圾收集器
 * 通过参数 -XX:MaxGCPauseMillis 设置垃圾处理过程最久停顿时间。
 * 通过命令 -XX:+UseAdaptiveSizePolicy 开启自适应策略。我们只要设置好堆的大小和 MaxGCPauseMillis 或 GCTimeRadio，收集器会自动调整新生代的大小、Eden 和 Survivor 的比例、对象进入老年代的年龄，以最大程度上接近我们设置的 MaxGCPauseMillis 或 GCTimeRadio。
 
-## 老年代垃圾收集器
+## 2老年代垃圾收集器
 
-### Serial Old 垃圾收集器（单线程）
+### 2.1Serial Old 垃圾收集器（单线程）
 
 Serial Old 收集器是 Serial 的老年代版本，都是单线程收集器，只启用一条 GC 线程，都适合客户端应用。它们唯一的区别就是：Serial Old 工作在老年代，使用“标记-整理”算法；Serial 工作在新生代，使用“复制”算法。
 
-### Parallel Old 垃圾收集器（多线程）
+### 2.2Parallel Old 垃圾收集器（多线程）
 
 Parallel Old 收集器是 Parallel Scavenge 的老年代版本，追求 CPU 吞吐量。
 
-### CMS 垃圾收集器
+### 2.3CMS 垃圾收集器
 
 CMS\(Concurrent Mark Sweep，并发标记清除\)收集器是以获取最短回收停顿时间为目标的收集器（追求低停顿），它在垃圾收集时使得用户线程和 GC 线程并发执行，因此在垃圾收集过程中用户也不会感到明显的卡顿。
 
@@ -69,14 +72,15 @@ CMS 的缺点：
 
 对于产生碎片空间的问题，可以通过开启 -XX:+UseCMSCompactAtFullCollection，在每次 Full GC 完成后都会进行一次内存压缩整理，将零散在各处的对象整理到一块。设置参数 -XX:CMSFullGCsBeforeCompaction告诉 CMS，经过了 N 次 Full GC 之后再进行一次内存整理。
 
-## G1 通用垃圾收集器
+## 2.4G1 通用垃圾收集器
 
 G1 是一款面向服务端应用的垃圾收集器，它没有新生代和老年代的概念，而是将堆划分为一块块独立的 Region。当要进行垃圾收集时，首先估计每个 Region 中垃圾的数量，每次都从垃圾回收价值最大的 Region 开始回收，因此可以获得最大的回收效率。
 
 从整体上看， G1 是基于“标记-整理”算法实现的收集器，从局部（两个 Region 之间）上看是基于“复制”算法实现的，这意味着运行期间不会产生内存空间碎片。
 
 这里抛个问题👇
-一个对象和它内部所引用的对象可能不在同一个 Region 中，那么当垃圾回收时，是否需要扫描整个堆内存才能完整地进行一次可达性分析？
+
+> 一个对象和它内部所引用的对象可能不在同一个 Region 中，那么当垃圾回收时，是否需要扫描整个堆内存才能完整地进行一次可达性分析？
 
 并不！每个 Region 都有一个 Remembered Set，用于记录本区域中所有对象引用的对象所在的区域，进行可达性分析时，只要在 GC Roots 中再加上 Remembered Set 即可防止对整个堆内存进行遍历。
 
