@@ -66,8 +66,8 @@ ParNew收集器其实就是Serial收集器的多线程版本。新生代并行�
 
 ![97ff89bcbbc18cd50ba5287850435f43](jvm系列(三)GC算法 垃圾收集器.resources/B6AC79A9-21A8-48B4-B29E-CF755E0970FC.png)
 
-### 3.3新生代：Parallel收集器
-Parallel Scavenge收集器类似ParNew收集器，Parallel收集器更关注系统的吞吐量。可以通过参数来打开自适应调节策略，虚拟机会根据当前系统的运行情况收集性能监控信息，动态调整这些参数以提供最合适的停顿时间或最大的吞吐量；也可以通过参数控制GC的时间不大于多少毫秒或者比例；新生代复制算法、老年代标记-压缩
+### 3.3新生代：Parallel Scavenge收集器
+Parallel Scavenge收集器类似ParNew收集器，Parallel收集器更关注系统的吞吐量。可以通过参数来打开自适应调节策略，虚拟机会根据当前系统的运行情况收集性能监控信息，动态调整这些参数以提供最合适的停顿时间或最大的吞吐量；也可以通过参数控制GC的时间不大于多少毫秒或者比例；**新生代一定是使用复制算法、老年代是标记-压缩**
 
 参数控制：-XX:+UseParallelGC  使用Parallel收集器+ 老年代串行
 
@@ -120,8 +120,9 @@ G1的新生代收集跟ParNew类似，当新生代占用达到一定比例的时
 **收集步骤：**
 
 1. **初始标记**，首先初始标记(Initial-Mark),这个阶段是停顿的(Stop the World Event)，并且会触发一次普通Mintor GC。对应GC log:GC pause (young) (inital-mark)
+   
    > Root Region Scanning，程序运行过程中会回收survivor区(存活到老年代)，这一过程必须在young GC之前完成。
-
+   
 2. **并发标记**Concurrent Marking，在整个堆中进行并发标记(和应用程序并发执行)，此过程可能被young GC中断。在并发标记阶段，若发现区域对象中的所有对象都是垃圾，那个这个区域会被立即回收(图中打X)。同时，并发标记过程中，会计算每个区域的对象活性(区域中存活对象的比例)。
 
 ![5757a98181cd217c55ea922727f3868e](jvm系列(三)GC算法 垃圾收集器.resources/E8512714-576B-47AD-928D-72543F14014C.png)

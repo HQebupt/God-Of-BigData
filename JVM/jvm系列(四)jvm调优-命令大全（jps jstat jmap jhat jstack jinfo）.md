@@ -1,29 +1,36 @@
 ## 简介
-运用jvm自带的命令可以方便的在生产监控和打印堆栈的日志信息帮忙我们来定位问题！虽然jvm调优成熟的工具已经有很多：jconsole、大名鼎鼎的VisualVM，IBM的Memory Analyzer等等，但是在生产环境出现问题的时候，一方面工具的使用会有所限制，另一方面喜欢装X的我们，总喜欢在出现问题的时候在终端输入一些命令来解决。所有的工具几乎都是依赖于jdk的接口和底层的这些命令，研究这些命令的使用也让我们更能了解jvm构成和特性。
+
+> 这个只能当做工具来查询，而且发现有些地方，jdk1.8的命令已经失效了。
+>
+> 需要搞懂什么？
+>
+> 1. 各种命令打印出gc日志的含义是基础
+> 2. 如何根据GC的信息，进行调优，有没有方法论？
+> 3. 有哪些工具可以帮助
+> 4. 有哪些命令分别用在什么场景
+
+运用jvm自带的命令可以方便的在生产监控和打印堆栈的日志信息帮忙我们来定位问题！
+
+虽然jvm调优成熟的工具已经有很多：jconsole、大名鼎鼎的VisualVM，IBM的Memory Analyzer等等，但是在生产环境出现问题的时候，一方面工具的使用会有所限制。
+
+所有的工具几乎都是依赖于jdk的接口和底层的这些命令，研究这些命令的使用也让我们更能了解jvm构成和特性。
 Sun JDK监控和故障处理命令有jps jstat jmap jhat jstack jinfo下面做一一介绍
 
-**jps**
+### 1**jps**
 JVM Process Status Tool,显示指定系统内所有的HotSpot虚拟机进程。
 
-命令格式
-jps [options] [hostid]
 option参数
 -l : 输出主类全名或jar路径
--q : 只输出LVMID
 -m : 输出JVM启动时传递给main()的参数
 -v : 输出JVM启动时显示指定的JVM参数
-其中[option]、[hostid]参数也可以不写。
 
-
-示例
-```
-$ jps -l -m
-  28920 org.apache.catalina.startup.Bootstrap start
-  11589 org.apache.catalina.startup.Bootstrap start
-  25816 sun.tools.jps.Jps -l -m
+```bash
+$ jps -lmv
+ 8104 loris-web-http.jar -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ExplicitGCInvokesConcurrent -Djava.awt.headless=true -verbose:gc -Xloggc:/home/loris/loris-jar//logs/loris-web-http-gc.log -XX:+PrintGCTimeStamps -XX:+PrintGCDetails -Dsun.rmi.dgc.server.gcInterval=600000 -Dsun.rmi.dgc.client.gcInterval=600000
+18480 loris-test.jar -Xmx3550m -Xms3550m -Xmn2g -XX:ParallelGCThreads=20 -XX:+UseConcMarkSweepGC -XX:+UseParNewGC
 ```
 
-**jstat**
+### 2**jstat**
 jstat(JVM statistics Monitoring)是用于监视虚拟机运行时状态信息的命令，它可以显示出虚拟机进程中的类装载、内存、垃圾收集、JIT编译等运行数据。
 
 命令格式
@@ -37,54 +44,71 @@ LVMID : 本地虚拟机进程ID
 option 参数总览
 ![9ae139c199be662b76b7860da58f0f07](jvm系列(四)jvm调优-命令大全（jps jstat jmap jhat jstack jinfo）.resources/3358A9D6-B4C7-4831-B26B-AD24973357EB.png)
 
-option 参数详解
+#### option 参数详解
 -class
 监视类装载、卸载数量、总空间以及耗费的时间
+
 ```
-$ jstat -class 11589
- Loaded  Bytes  Unloaded  Bytes     Time   
-  7035  14506.3     0     0.0       3.67
+$ jstat -class 27348 1000 10 // 1000ms输出，共10次
+Loaded  Bytes  Unloaded  Bytes     Time
+ 10276 18659.4        0     0.0      14.72
+Loaded  Bytes  Unloaded  Bytes     Time
+ 21257 36337.8     3836  5656.6      27.61
 Loaded : 加载class的数量
 Bytes : class字节大小
 Unloaded : 未加载class的数量
 Bytes : 未加载class的字节大小
 Time : 加载时间
+
+```
 -compiler
 输出JIT编译过的方法数量耗时等
+
 ```
 $ jstat -compiler 1262
 Compiled Failed Invalid   Time   FailedType FailedMethod
-    2573      1       0    47.60          1 org/apache/catalina/loader/WebappClassLoader findResourceInternal  
+    7610      8       0    93.74          1 org/springframework/core/annotation/AnnotationUtils postProcessAnnotationAttributes
 Compiled : 编译数量
 Failed : 编译失败数量
 Invalid : 无效数量
 Time : 编译耗时
 FailedType : 失败类型
 FailedMethod : 失败方法的全限定名
+```
+
+
 -gc
 垃圾回收堆的行为统计，常用命令
-```
-$ jstat -gc 1262
- S0C    S1C     S0U     S1U   EC       EU        OC         OU        PC       PU         YGC    YGCT    FGC    FGCT     GCT   
-26112.0 24064.0 6562.5  0.0   564224.0 76274.5   434176.0   388518.3  524288.0 42724.7    320    6.417   1      0.398    6.815
-```
-C即Capacity 总容量，U即Used 已使用的容量
 
-S0C : survivor0区的总容量
-S1C : survivor1区的总容量
-S0U : survivor0区已使用的容量
-S1U : survivor1区已使用的容量
-EC : Eden区的总容量
-EU : Eden区已使用的容量
-OC : Old区的总容量
-OU : Old区已使用的容量
-PC	当前perm的容量 (KB)
-PU	perm的使用 (KB)
-YGC : 新生代垃圾回收次数
-YGCT : 新生代垃圾回收时间
-FGC : 老年代垃圾回收次数
-FGCT : 老年代垃圾回收时间
-GCT : 垃圾回收总消耗时间
+```
+$ jstat -gc 1
+ S0C    S1C    S0U    S1U      EC       EU        OC         OU       MC     MU    CCSC   CCSU   YGC     YGCT    FGC    FGCT     GCT
+58368.0 58880.0 36632.5  0.0   569344.0 377053.8  689152.0   117122.4  155468.0 145640.3 20096.0 18445.6    979   37.872  46     24.417   62.289
+```
+C即Capacity 总容量，U即Used 已使用的容量，单位是KB；时间的单位是秒。
+
+各个数据项的含义如下：
+
+- S0C：from 区的大小
+- S1C：to 区的大小
+- S1U：from 区使用的大小
+- S1U：to 去使用的大小
+- EC：eden 区的大小
+- EU：eden 去使用的大小
+- OC：老年代的大小
+- OU：老年代使用的大小
+- MC：方法区的大小
+- MU：方法区使用的大小
+- CCSC：压缩类空间大小
+- CCUS：压缩类空间使用的大小
+- YGC：年轻代垃圾回收的次数
+- YGCT：年轻代垃圾回收消耗时间
+- FGC：老年代垃圾回收的次数
+- FGCT：老年代垃圾回收消耗时间
+- GCT：垃圾回收的总时间
+
+>  可以使用可视化的分析工具来对 CG 日志进行分析，比如 https://gceasy.io/。
+
 ```
 $ jstat -gc 1262 2000 20
 ```
@@ -92,56 +116,61 @@ $ jstat -gc 1262 2000 20
 
 -gccapacity
 同-gc，不过还会输出Java堆各区域使用到的最大、最小空间
+
 ```
-$ jstat -gccapacity 1262
- NGCMN    NGCMX     NGC    S0C   S1C       EC         OGCMN      OGCMX      OGC        OC       PGCMN    PGCMX     PGC      PC         YGC    FGC 
-614400.0 614400.0 614400.0 26112.0 24064.0 564224.0   434176.0   434176.0   434176.0   434176.0 524288.0 1048576.0 524288.0 524288.0    320     1  
+jstat -gccapacity 1
+ NGCMN    NGCMX     NGC     S0C   S1C       EC      OGCMN      OGCMX       OGC         OC       MCMN     MCMX      MC     CCSMN    CCSMX     CCSC    YGC    FGC
+ 87040.0 698880.0 692224.0 124928.0 127488.0 437248.0   175104.0  1398272.0   689152.0   689152.0      0.0 1185792.0 155468.0      0.0 1048576.0  20096.0    997    47
 ```
 NGCMN : 新生代占用的最小空间
 NGCMX : 新生代占用的最大空间
+
+NGC：当前新生代包括Eden和Survivor的总容量
+
 OGCMN : 老年代占用的最小空间
 OGCMX : 老年代占用的最大空间
-OGC：当前年老代的容量 (KB)
+OGC：当前年老代的容量 (KB) 与下面的值含义一样。
 OC：当前年老代的空间 (KB)
 PGCMN : perm占用的最小空间
 PGCMX : perm占用的最大空间
 
 -gcutil
 
-同-gc，不过输出的是已使用空间占总空间的百分比
+同-gc，不过输出的是已使用空间占自己所在区域的总空间的百分比
 ```
-$ jstat -gcutil 28920
-  S0     S1     E      O      P     YGC     YGCT    FGC    FGCT     GCT   
- 12.45   0.00  33.85   0.00   4.44  4       0.242     0    0.000    0.242
+ jstat -gcutil 1
+  S0     S1     E      O      M     CCS    YGC     YGCT    FGC    FGCT     GCT
+  0.00  56.77  13.87  17.00  93.76  91.95   1012   39.193    47   24.816   64.010
 ```
 -gccause
 
 垃圾收集统计概述（同-gcutil），附加最近两次垃圾回收事件的原因
 ```
-$ jstat -gccause 28920
-  S0     S1     E      O      P       YGC     YGCT    FGC    FGCT     GCT    LGCC                 GCC                 
- 12.45   0.00  33.85   0.00   4.44      4    0.242     0    0.000    0.242   Allocation Failure   No GC  
+jstat -gccause 1
+  S0     S1     E      O      M     CCS    YGC     YGCT    FGC    FGCT     GCT    LGCC                 GCC
+ 59.76   0.00   9.88  17.03  93.77  91.95   1013   39.239    47   24.816   64.056 Allocation Failure   No GC
 ```
 LGCC：最近垃圾回收的原因
 GCC：当前垃圾回收的原因
--gcnew
-统计新生代的行为
+
+- -gcnew
+  统计新生代的行为
+
 ```
-$ jstat -gcnew 28920
- S0C      S1C      S0U        S1U  TT  MTT  DSS      EC        EU         YGC     YGCT  
- 419392.0 419392.0 52231.8    0.0  6   6    209696.0 3355520.0 1172246.0  4       0.242
+jstat -gcnew  1
+ S0C    S1C    S0U    S1U   TT MTT  DSS      EC       EU     YGC     YGCT
+76288.0 81408.0 32093.0    0.0 15  15 81408.0 484352.0 122968.6   1015   39.288
 ```
 TT：Tenuring threshold(提升阈值)
 MTT：最大的tenuring threshold
 DSS：survivor区域大小 (KB)
 
--gcnewcapacity
+- -gcnewcapacity 新生代与其相应的内存空间的统计: 其实和上面的输出信息是一样的。
 
-新生代与其相应的内存空间的统计
 ```
-$ jstat -gcnewcapacity 28920
-  NGCMN      NGCMX       NGC      S0CMX     S0C     S1CMX     S1C       ECMX        EC        YGC   FGC 
- 4194304.0  4194304.0  4194304.0 419392.0 419392.0 419392.0 419392.0  3355520.0  3355520.0     4     0
+ jstat -gcnewcapacity 1
+  NGCMN      NGCMX       NGC      S0CMX     S0C     S1CMX     S1C       ECMX        EC      YGC   FGC
+  87040.0   698880.0   628736.0 232960.0  60928.0 232960.0  62976.0   697856.0   502784.0  1025    47
 ```
 NGC:当前年轻代的容量 (KB)
 S0CMX:最大的S0空间 (KB)
@@ -149,43 +178,47 @@ S0C:当前S0空间 (KB)
 ECMX:最大eden空间 (KB)
 EC:当前eden空间 (KB)
 
--gcold
 
-统计旧生代的行为
-```
-$ jstat -gcold 28920
+
+- 统计老年代的行为 -gcold
+
+```java
+$ jstat -gcold 1
    PC       PU        OC           OU       YGC    FGC    FGCT     GCT   
 1048576.0  46561.7   6291456.0     0.0      4      0      0.000    0.242
--gcoldcapacity
+ jstat -gcold  1
+   MC       MU      CCSC     CCSU       OC          OU       YGC    FGC    FGCT     GCT
+155468.0 145828.6  20096.0  18479.0    689152.0    118660.6   1029    47   24.816   64.496
 ```
-统计旧生代的大小和空间
-```
-$ jstat -gcoldcapacity 28920
-   OGCMN       OGCMX        OGC         OC         YGC   FGC    FGCT     GCT   
-  6291456.0   6291456.0   6291456.0   6291456.0     4     0    0.000    0.242
-```
--gcpermcapacity
+PC MC方法区的容量
 
-永生代行为统计
+PU MU 方法区已经使用的
+
+CCSC CCSU: 压缩类空间的大小
+
+- 统计老年代的大小和空间-gcoldcapacity
+
 ```
-$ jstat -gcpermcapacity 28920
-    PGCMN      PGCMX       PGC         PC      YGC   FGC    FGCT     GCT   
- 1048576.0  2097152.0  1048576.0  1048576.0     4     0    0.000    0.242
+jstat -gcoldcapacity 1
+   OGCMN       OGCMX        OGC         OC       YGC   FGC    FGCT     GCT
+   175104.0   1398272.0    689152.0    689152.0  1031    47   24.816   64.570
 ```
+
+
 -printcompilation
 
 hotspot编译方法统计
 ```
-$ jstat -printcompilation 28920
-    Compiled  Size  Type Method
-    1291      78     1    java/util/ArrayList indexOf
+jstat -printcompilation 1
+Compiled  Size  Type Method
+   39951     87    1 org/springframework/data/jpa/repository/query/PartTreeJpaQuery getExecution
 ```
 Compiled：被执行的编译任务的数量
-Size：方法字节码的字节数
+Size：方法字节码的字节数（单位：bytes）
 Type：编译类型
 Method：编译方法的类名和方法名。类名使用”/” 代替 “.” 作为空间分隔符. 方法名是给出类的方法名. 格式是一致于HotSpot - XX:+PrintComplation 选项
 
-**jmap**
+### 3 **jmap**
 jmap(JVM Memory Map)命令用于生成heap dump文件，如果不使用这个命令，还阔以使用-XX:+HeapDumpOnOutOfMemoryError参数来让虚拟机出现OOM的时候·自动生成dump文件。 jmap不仅能生成dump文件，还阔以查询finalize执行队列、Java堆和永久代的详细信息，如当前使用率、当前使用的是哪种收集器等。
 
 命令格式
@@ -200,10 +233,10 @@ histo : 显示堆中对象的统计信息
 permstat : to print permanent generation statistics
 F : 当-dump没有响应时，强制生成dump快照
 
-示例
 
--dump
-常用格式
+
+- -dump
+
 ```
 -dump::live,format=b,file=<filename> pid 
 ```
@@ -214,10 +247,10 @@ $ jmap -dump:live,format=b,file=dump.hprof 28920
   Dumping heap to /home/xxx/dump.hprof ...
   Heap dump file created
 ```
-dump.hprof这个后缀是为了后续可以直接用MAT(Memory Anlysis Tool)打开。
+>  dump.hprof这个后缀是为了后续可以直接用MAT(Memory Anlysis Tool)打开。
 
--finalizerinfo
-打印等待回收对象的信息
+- -finalizerinfo
+  打印等待回收对象的信息
 
 ```
 $ jmap -finalizerinfo 28920
@@ -229,8 +262,8 @@ $ jmap -finalizerinfo 28920
 ```
 可以看到当前F-QUEUE队列中并没有等待Finalizer线程执行finalizer方法的对象。
 
--heap
-打印heap的概要信息，GC使用的算法，heap的配置及wise heap的使用情况,可以用此来判断内存目前的使用情况以及垃圾回收情况
+- -heap
+  打印heap的概要信息，GC使用的算法，heap的配置及wise heap的使用情况,可以用此来判断内存目前的使用情况以及垃圾回收情况
 
 ```
 $ jmap -heap 28920

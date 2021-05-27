@@ -1,5 +1,7 @@
 Java GC就是JVM记录仪，书画了JVM各个分区的表演。
 
+> 这是实践的，需要打开GC日志，进行分析。
+
 ## 什么是 Java GC
 
 Java GC（Garbage Collection，垃圾收集，垃圾回收）机制，是Java与C++/C的主要区别之一，作为Java开发者，一般不需要专门编写内存回收和垃圾清理代码，对内存泄露和溢出的问题，也不需要像C程序员那样战战兢兢。这是因为在Java虚拟机中，存在自动内存管理和垃圾清扫机制。概括地说，该机制对JVM（Java Virtual Machine）中的内存进行标记，并确定哪些内存需要回收，根据一定的回收策略，自动的回收内存，永不停息（Nerver Stop）的保证JVM中的内存空间，防止出现内存泄露和溢出问题。
@@ -125,7 +127,6 @@ GC Easy
 推荐使用此工具进行gc分析。
 
 ![92ee2b2bea94d0ab7d5560cbb78bb8a2.png](https://github.com/wangzhiwubigdata/God-Of-BigData/blob/master/JVM/jvm%E7%B3%BB%E5%88%97(%E4%BA%94)Java%20GC%20%E5%88%86%E6%9E%90.resources/1550316713780.jpg)
-
 
 
 
