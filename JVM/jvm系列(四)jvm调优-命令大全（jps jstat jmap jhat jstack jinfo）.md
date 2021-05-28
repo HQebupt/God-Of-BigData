@@ -178,7 +178,27 @@ S0C:当前S0空间 (KB)
 ECMX:最大eden空间 (KB)
 EC:当前eden空间 (KB)
 
+- -gcmetacapacity  元数据空间统计
 
+```
+jstat -gcmetacapacity 27348
+   MCMN       MCMX        MC       CCSMN      CCSMX       CCSC     YGC   FGC    FGCT     GCT
+   0.0  1105920.0    64768.0        0.0  1048576.0     7936.0    19     3    1.197    1.759
+```
+
+- **MCMN:** 最小元数据容量
+
+- **MCMX：**最大元数据容量
+
+- **MC：**当前元数据空间大小
+
+- **CCSMN：**最小压缩类空间大小
+
+- **CCSMX：**最大压缩类空间大小
+
+- **CCSC：**当前压缩类空间大小
+
+  
 
 - 统计老年代的行为 -gcold
 
@@ -203,7 +223,7 @@ jstat -gcoldcapacity 1
    OGCMN       OGCMX        OGC         OC       YGC   FGC    FGCT     GCT
    175104.0   1398272.0    689152.0    689152.0  1031    47   24.816   64.570
 ```
-
+##  
 
 -printcompilation
 
@@ -284,7 +304,6 @@ $ jmap -heap 28920
      OldSize          = 5439488 (5.1875MB)//对应jvm启动参数-XX:OldSize=<value>:设置JVM堆的‘老生代’的大小
      NewRatio         = 2 //对应jvm启动参数-XX:NewRatio=:‘新生代’和‘老生代’的大小比率
      SurvivorRatio    = 8 //对应jvm启动参数-XX:SurvivorRatio=设置年轻代中Eden区与Survivor区的大小比值 
-     PermSize         = 21757952 (20.75MB)  //对应jvm启动参数-XX:PermSize=<value>:设置JVM堆的‘永生代’的初始大小
      MaxPermSize      = 85983232 (82.0MB)//对应jvm启动参数-XX:MaxPermSize=<value>:设置JVM堆的‘永生代’的最大大小
      G1HeapRegionSize = 0 (0.0MB)  
 
@@ -310,21 +329,17 @@ $ jmap -heap 28920
      used     = 0 (0.0MB)
      free     = 86507520 (82.5MB)
      0.0% used
-  PS Perm Generation//当前的 “永生代” 内存分布
-     capacity = 22020096 (21.0MB)
-     used     = 2496528 (2.3808746337890625MB)
-     free     = 19523568 (18.619125366210938MB)
-     11.337498256138392% used  
-
   670 interned Strings occupying 43720 bytes.
 ```
 可以很清楚的看到Java堆中各个区域目前的情况。
 
--histo
-打印堆的对象统计，包括对象数、内存大小等等 （因为在dump:live前会进行full gc，如果带上live则只统计活对象，因此不加live的堆大小要大于加live堆的大小 ）
+> 因为Perm区在jdk1.8之后就移除heap，所以一般在这里是看不到的。
+
+- -histo
+  打印堆的对象统计，包括对象数、内存大小等等 （因为在dump:live前会进行full gc，如果带上live则只统计活对象，因此不加live的堆大小要大于加live堆的大小 ）
 
 ```
-$ jmap -histo:live 28920 | more
+$ jmap -histo:live 27348 | more
  num     #instances         #bytes  class name
 ----------------------------------------------
    1:         83613       12012248  <constMethodKlass>
@@ -353,31 +368,13 @@ Z  boolean
 [  数组，如[I表示int[]
 [L+类名 其他对象
 
--permstat
-打印Java堆内存的永久保存区域的类加载器的智能统计信息。对于每个类加载器而言，它的名称、活跃度、地址、父类加载器、它所加载的类的数量和大小都会被打印。此外，包含的字符串数量和大小也会被打印。
+- -F
+  强制模式。如果指定的pid没有响应，请使用jmap -dump或jmap -histo选项。此模式下，不支持live子选项。
 
-```
-$ jmap -permstat 28920
-  Attaching to process ID 28920, please wait...
-  Debugger attached successfully.
-  Server compiler detected.
-  JVM version is 24.71-b01
-  finding class loader instances ..done.
-  computing per loader stat ..done.
-  please wait.. computing liveness.liveness analysis may be inaccurate ...
-  
-  class_loader            classes bytes   parent_loader           alive?  type  
-  <bootstrap>             3111    18154296          null          live    <internal>
-  0x0000000600905cf8      1       1888    0x0000000600087f08      dead    sun/reflect/DelegatingClassLoader@0x00000007800500a0
-  0x00000006008fcb48      1       1888    0x0000000600087f08      dead    sun/reflect/DelegatingClassLoader@0x00000007800500a0
-  0x00000006016db798      0       0       0x00000006008d3fc0      dead    java/util/ResourceBundle$RBClassLoader@0x0000000780626ec0
-  0x00000006008d6810      1       3056      null          dead    sun/reflect/DelegatingClassLoader@0x00000007800500a0
-```
--F
-强制模式。如果指定的pid没有响应，请使用jmap -dump或jmap -histo选项。此模式下，不支持live子选项。
+#### 5 jhat
+jhat(JVM Heap Analysis Tool)命令是与jmap搭配使用，用来分析jmap生成的dump，jhat内置了一个微型的HTTP/HTML服务器，生成dump的分析结果后，可以在浏览器中查看。
 
-jhat
-jhat(JVM Heap Analysis Tool)命令是与jmap搭配使用，用来分析jmap生成的dump，jhat内置了一个微型的HTTP/HTML服务器，生成dump的分析结果后，可以在浏览器中查看。在此要注意，一般不会直接在服务器上进行分析，因为jhat是一个耗时并且耗费硬件资源的过程，一般把服务器生成的dump文件复制到本地或其他机器上进行分析。
+>  注意 因为jhat是一个耗时并且耗费硬件资源的过程，一般把服务器生成的dump文件复制到本地或其他机器上进行分析。
 
 命令格式
 jhat [dumpfile]
@@ -436,8 +433,8 @@ Execute Object Query Language (OQL) query
 Show heap histogram 以树状图形式展示堆情况。如下图：![80be25d2f1c6b019c28d96c42842fac6](jvm系列(四)jvm调优-命令大全（jps jstat jmap jhat jstack jinfo）.resources/8DE752AB-6C96-4A58-8E01-8970BA3E2014.png)
 具体排查时需要结合代码，观察是否大量应该被回收的对象在一直被引用或者是否有占用内存特别大的对象无法被回收。一般情况，会down到客户端用工具来分析
 
-**jstack**
-jstack用于生成java虚拟机当前时刻的线程快照。线程快照是当前java虚拟机内每一条线程正在执行的方法堆栈的集合，生成线程快照的主要目的是定位线程出现长时间停顿的原因，如线程间死锁、死循环、请求外部资源导致的长时间等待等。 线程出现停顿的时候通过jstack来查看各个线程的调用堆栈，就可以知道没有响应的线程到底在后台做什么事情，或者等待什么资源。 如果java程序崩溃生成core文件，jstack工具可以用来获得core文件的java stack和native stack的信息，从而可以轻松地知道java程序是如何崩溃和在程序何处发生问题。另外，jstack工具还可以附属到正在运行的java程序中，看到当时运行的java程序的java stack和native stack的信息, 如果现在运行的java程序呈现hung的状态，jstack是非常有用的。
+#### 6**jstack**
+jstack用于生成java虚拟机当前时刻的线程快照。线程快照是当前java虚拟机内每一条线程正在执行的方法堆栈的集合，生成线程快照的主要目的是定位线程出现长时间停顿的原因，如线程间死锁、死循环、请求外部资源导致的长时间等待等。 
 
 命令格式
 jstack [option] LVMID
@@ -446,7 +443,24 @@ option参数
 -l : 除堆栈外，显示关于锁的附加信息
 -m : 如果调用到本地方法的话，可以显示C/C++的堆栈
 
+#### 线程状态
+
+查看线程堆栈信息时可能会看到的**线程的几种状态**：
+
+> NEW,未启动的。不会出现在Dump中。
+>
+> RUNNABLE,在虚拟机内执行的。
+>
+> BLOCKED,受阻塞并等待监视器锁。
+>
+> WATING,无限期等待另一个线程执行特定操作。
+>
+> TIMED_WATING,有时限的等待另一个线程的特定操作。
+>
+> TERMINATED,已退出的。
+
 示例
+
 ```
 $ jstack -l 11494|more
 2016-07-28 13:40:04
@@ -478,11 +492,12 @@ Full thread dump Java HotSpot(TM) 64-Bit Server VM (24.71-b01 mixed mode):
       .....
 ```
 这里有一篇文章解释的很好 [分析打印出的文件内容](http://www.hollischuang.com/archives/110)
-jinfo
-jinfo(JVM Configuration info)这个命令作用是实时查看和调整虚拟机运行参数。 之前的jps -v口令只能查看到显示指定的参数，如果想要查看未被显示指定的参数的值就要使用jinfo口令
 
-**jinfo**
-jinfo(JVM Configuration info)这个命令作用是实时查看和调整虚拟机运行参数。 之前的jps -v口令只能查看到显示指定的参数，如果想要查看未被显示指定的参数的值就要使用jinfo口令
+
+#### #### 7**jinfo**
+jinfo(JVM Configuration info)这个命令作用是实时查看和调整虚拟机运行参数。 
+
+> jps -v口令只能查看到显示指定的参数，如果想要查看未被显示指定的参数的值就要使用jinfo. 这个可以真正生效的参数是什么。
 
 命令格式
 jinfo [option] [args] LVMID
@@ -490,8 +505,12 @@ option参数
 -flag : 输出指定args参数的值
 -flags : 不需要args参数，输出所有JVM参数的值
 -sysprops : 输出系统属性，等同于System.getProperties()
-示例
+
 ```
-$ jinfo -flag 11494
--XX:CMSInitiatingOccupancyFraction=80
+jinfo -flags 27348 
+Attaching to process ID 27348, please wait...
+Debugger attached successfully.
+Server compiler detected.
+JVM version is 25.292-b10 # 下面的单位都是Byte
+Non-default VM flags: -XX:CICompilerCount=12 -XX:InitialHeapSize=1056964608 -XX:MaxHeapSize=16890462208 -XX:MaxNewSize=5629804544 -XX:MinHeapDeltaBytes=524288 -XX:NewSize=352321536 -XX:OldSize=704643072 -XX:+UseCompressedClassPointers -XX:+UseCompressedOops -XX:+UseFastUnorderedTimeStamps -XX:+UseParallelGC
 ```
