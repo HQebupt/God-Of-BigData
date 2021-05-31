@@ -35,7 +35,7 @@ Heap # 没有发生GC的日志
 2021-05-27T15:14:54.581+0800: Application time: 0.0048129 seconds
 ```
 
-##### 发生了YoungGC
+##### 发生了PS YoungGC
 
 ```
 {Heap before GC invocations=1 (full 0):
@@ -68,7 +68,7 @@ Heap after GC invocations=1 (full 0):
 2021-05-27T15:42:13.746+0800: Application time: 1.0011009 seconds  # 程序在这次GC期间，运行的时间 1s
 ```
 
-#### 发生了FullGC
+#### 发生了FullGC(PSYoungGen + ParOldGen)
 
 fullGC是不会打印出新生代的年龄情况的。
 
@@ -161,12 +161,12 @@ Heap after GC invocations=27 (full 33):
 #### 开启G1的日志 -XX:+UseG1GC    ---TODO
 
 ```java
-{Heap before GC invocations=20 (full 0):
+{Heap before GC invocations=20 (full 0): # GC发生前，堆的情况，总共8M,用了3.5M。
  garbage-first heap   total 8192K, used 3492K [0x00000000ff800000, 0x00000000ff900040, 0x0000000100000000)
   region size 1024K, 1 young (1024K), 1 survivors (1024K)
  Metaspace       used 2583K, capacity 4486K, committed 4864K, reserved 1056768K
   class space    used 289K, capacity 386K, committed 512K, reserved 1048576K
-2021-05-27T22:32:06.478+0800: [GC pause (G1 Humongous Allocation) (young)
+2021-05-27T22:32:06.478+0800: [GC pause (G1 Humongous Allocation) (young) # 
 Desired survivor size 524288 bytes, new threshold 15 (max 15)
 - age  13:     298824 bytes,     298824 total
 , 0.0035538 secs]
@@ -208,3 +208,4 @@ Heap after GC invocations=21 (full 0):
 
 
 
+![image-20210531135627701](GC参数工具查阅.assets/image-20210531135627701-1622440589602.png)
