@@ -23,7 +23,7 @@ JVM 参数，目的是读懂GC的配置。**基于 OpenJDK1.8 和 HotSpot 虚拟
 
 ##### 没有发生GC
 
-```
+```python
 Heap # 没有发生GC的日志
  def new generation   total 2432K, used 1545K [0x05600000, 0x058a0000, 0x058a0000) # 新生代, 共2432K,已经用了1545K
   eden space 2176K,  71% used [0x05600000, 0x057825b0, 0x05820000)
@@ -37,7 +37,7 @@ Heap # 没有发生GC的日志
 
 ##### 发生了PS YoungGC
 
-```
+```python
 {Heap before GC invocations=1 (full 0):
  PSYoungGen      total 2048K, used 1513K [0x00000000ffd80000, 0x0000000100000000, 0x0000000100000000)
   eden space 1536K, 98% used [0x00000000ffd80000,0x00000000ffefa5a0,0x00000000fff00000) # Eden区满了
@@ -72,7 +72,7 @@ Heap after GC invocations=1 (full 0):
 
 fullGC是不会打印出新生代的年龄情况的。
 
-```
+```python
 {Heap before GC invocations=9 (full 2): # 这是第9次GC,full GC发生了2次。这里无法判断此次是什么GC，需要看下面具体的。
  PSYoungGen      total 2048K, used 1024K [0x00000000ffd80000, 0x0000000100000000, 0x0000000100000000)
   eden space 1536K, 66% used [0x00000000ffd80000,0x00000000ffe80010,0x00000000fff00000) # 新生代Eden区有66%占用
@@ -100,7 +100,7 @@ Heap after GC invocations=9 (full 2): # 这次full GC后，堆内的情况。
 
 #### 开启UseConcMarkSweepGC的日志
 
-```java
+```python
 {Heap before GC invocations=39 (full 0):
  par new generation   total 2432K, used 2090K [0x00000000ff800000, 0x00000000ffaa0000, 0x00000000ffaa0000) # 新生代共2.4M，用了2.09M
   eden space 2176K,  96% used [0x00000000ff800000, 0x00000000ffa0aaa0, 0x00000000ffa20000)
@@ -130,7 +130,7 @@ Heap after GC invocations=40 (full 0):
 
 Full GC的日志
 
-```
+```python
 {Heap before GC invocations=26 (full 32):
  par new generation   total 2432K, used 2431K [0x00000000ff800000, 0x00000000ffaa0000, 0x00000000ffaa0000)
   eden space 2176K,  99% used [0x00000000ff800000, 0x00000000ffa1fff8, 0x00000000ffa20000)
@@ -158,15 +158,15 @@ Heap after GC invocations=27 (full 33):
 
 
 
-#### 开启G1的日志 -XX:+UseG1GC    ---TODO
+#### 开启G1的日志 -XX:+UseG1GC  
 
-```java
+```python
 {Heap before GC invocations=20 (full 0): # GC发生前，堆的情况，总共8M,用了3.5M。
  garbage-first heap   total 8192K, used 3492K [0x00000000ff800000, 0x00000000ff900040, 0x0000000100000000)
   region size 1024K, 1 young (1024K), 1 survivors (1024K)
  Metaspace       used 2583K, capacity 4486K, committed 4864K, reserved 1056768K
   class space    used 289K, capacity 386K, committed 512K, reserved 1048576K
-2021-05-27T22:32:06.478+0800: [GC pause (G1 Humongous Allocation) (young) # 
+2021-05-27T22:32:06.478+0800: [GC pause (G1 Humongous Allocation) (young) # 分配大对象导致的young GC
 Desired survivor size 524288 bytes, new threshold 15 (max 15)
 - age  13:     298824 bytes,     298824 total
 , 0.0035538 secs]
@@ -194,7 +194,7 @@ Desired survivor size 524288 bytes, new threshold 15 (max 15)
       [Humongous Register: 0.0 ms]
       [Humongous Reclaim: 0.0 ms]
       [Free CSet: 0.0 ms]
-   [Eden: 0.0B(3072.0K)->0.0B(3072.0K) Survivors: 1024.0K->1024.0K Heap: 3492.8K(8192.0K)->411.6K(8192.0K)]
+   [Eden: 0.0B(3072.0K)->0.0B(3072.0K) Survivors: 1024.0K->1024.0K Heap: 3492.8K(8192.0K)->411.6K(8192.0K)] # Eden区占用0B,survivors 
 Heap after GC invocations=21 (full 0):
  garbage-first heap   total 8192K, used 411K [0x00000000ff800000, 0x00000000ff900040, 0x0000000100000000)
   region size 1024K, 1 young (1024K), 1 survivors (1024K)
