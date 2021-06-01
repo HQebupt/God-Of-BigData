@@ -137,7 +137,7 @@ refer:[堆外内存](https://mp.weixin.qq.com/s/Ht3pXZmnSINJKmmGqHkppw)
 
 针对gc日志，我们就能大致推断出youngGC与fullGC是否过于频繁或者耗时过长，从而对症下药。我们下面将对G1垃圾收集器来做分析，这边也建议大家使用G1`-XX:+UseG1GC`。
 
-- **youngGC过频繁**(什么叫做十分频繁，标准是什么，难道是看业务来定)
+- **youngGC过频繁**(什么叫做十分频繁，标准是什么，难道是看业务来定，1s就有一次，就很频繁)
 
 youngGC频繁一般是短周期小对象较多，先考虑是不是Eden区/新生代设置的太小了，看能否通过调整-Xmn、-XX:SurvivorRatio等参数设置来解决问题。如果参数正常，但是young gc频率还是太高，就需要使用Jmap和MAT对dump文件进行进一步排查了。
 
@@ -146,3 +146,7 @@ youngGC频繁一般是短周期小对象较多，先考虑是不是Eden区/新�
 耗时过长问题就要看GC日志里耗时耗在哪一块了。以G1日志为例，可以关注Root Scanning、Object Copy、Ref Proc等阶段。Ref Proc耗时长，就要注意引用相关的对象。Root Scanning耗时长，就要注意线程数、跨代引用。Object Copy则需要关注对象生存周期。而且耗时分析它需要横向比较，就是和其他项目或者正常时间段的耗时比较。比如说图中的Root Scanning和正常时间段比增长较多，那就是起的线程太多了。
 
 ![Image](经验0Java线上故障排查方法论.assets/640-1622426736022)
+
+## 参考
+
+> 网络和TCP排查TODO: [故障排查套路](https://mp.weixin.qq.com/s/Ht3pXZmnSINJKmmGqHkppw)
