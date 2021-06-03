@@ -133,4 +133,22 @@
   
   ```
   
-  
+#### 2.2 ConcurrentHashMap
+
+> 漏掉了CopyOnWriteArrayList，后期有时间，补上。TODO
+
+@jdk7 使用分段锁设计；iterator 不会抛 concurrentModification 异常，但是只能被一个线程操作；size 方法开销很大 
+
+![img](0JavaSummary.assets/120290-1622708615286)
+
+
+
+@jdk8 改为 CAS 设计，新增的 KV 对使用 CAS 尝试初次写入，写入失败则转变为加锁同步逻辑（锁升级优化）；增加 addCount 方法专门记录 size ；并发修改一个下标的 Node 时才加 synchronize ，并且只锁定当前的 Node
+
+- 取值操作不阻塞，因此与更新操作会有所重叠；取值操作反映最近正好已完成的更新，即这种反映遵循一种 happen-before 的关系；批量操作时，并发取值操作操作反映部分的插入、移除的结果，而非批量操作的整体完成后的结果；同理，迭代器操作反映的是迭代器创建那一刻的结果集
+- isEmpty、size、containsValue 只在 map 不并发更新的时候准确，适合用于监控或估算，而不适于程序控制；不支持 Null Key/Value
+- putVal
+  - 计算 hash 值，自旋访问 table，table 为空则采用 CAS 初始化 table
+  - 获取 hash 值对应节点位置 i，若该位置为空则 CAS 插入
+  - 若有线程在扩容，则先执行 helpTransfer 帮助迁移到新 table
+  - 否则，以当前节点的链表、树的头结点为 lock 加锁，进行 add 操作
