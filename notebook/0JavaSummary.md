@@ -132,7 +132,6 @@
       }
   
   ```
-  
 #### 2.2 ConcurrentHashMap
 
 > 漏掉了CopyOnWriteArrayList，后期有时间，补上。TODO

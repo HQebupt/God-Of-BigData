@@ -10,30 +10,32 @@ http://tutorials.jenkov.com/java-nio/index.html
 #### Selector（选择器）介绍
 Selector一般称为选择器,当然你也可以翻译为多路复用器。它是Java NIO核心组件中的一个,用于检查一个或多个NIO Channel（通道）的状态是否处于可读、可写。如此可以实现单线程管理多个channels,也就是可以管理多个网络链接。
 ![e87095c49bef56cb3cce7c4529cac9ad](Java NIO之Selector(选择器).resources/C32A7750-CD6E-469A-8E9E-BEC983989522.png)
-使用Selector的好处在于:使用更少的线程来就可以来处理通道了,相比使用多个线程,避免了线程上下文切换带来的开销。
+**使用Selector的好处在于:使用更少的线程来就可以来处理通道了,相比使用多个线程,避免了线程上下文切换带来的开销。**
 
 
 #### Selector（选择器）的使用方法介绍
 **1. Selector的创建**
 通过调用Selector.open()方法创建一个Selector对象，如下：
-```
+```java
 Selector selector = Selector.open();
 ```
 **2. 注册Channel到Selector**
-```
+```java
 channel.configureBlocking(false);
 SelectionKey key = channel.register(selector, Selectionkey.OP_READ);
 ```
 **Channel必须是非阻塞的。**
 所以FileChannel不适用Selector，因为FileChannel不能切换为非阻塞模式，更准确的来说是因为FileChannel没有继承SelectableChannel。Socket channel可以正常使用。
 SelectableChannel抽象类 有一个 configureBlocking（） 方法用于使通道处于阻塞模式或非阻塞模式。
-```
+
+```java
 abstract SelectableChannel configureBlocking(boolean block)  
 ```
 注意：
 SelectableChannel抽象类的configureBlocking（） 方法是由 AbstractSelectableChannel抽象类实现的，SocketChannel、ServerSocketChannel、DatagramChannel都是直接继承了 AbstractSelectableChannel抽象类 。
 大家有兴趣可以看看NIO的源码，各种抽象类和抽象类上层的抽象类。我本人暂时不准备研究NIO源码，因为还有很多事情要做，需要研究的同学可以自行看看。
 register() 方法的第二个参数。这是一个“ interest集合 ”，意思是在通过Selector监听Channel时对什么事件感兴趣。可以监听四种不同类型的事件：
+
 * Connect
 * Accept
 * Read
@@ -191,7 +193,7 @@ while(true) {
 ```
 #### 客户端与服务端简单交互实例
 服务端：
-```
+```java
 package selector;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -259,7 +261,7 @@ public class WebServer {
 }
 ```
 客户端：
-```
+```java
 package selector;
 import java.io.IOException;
 import java.net.InetSocketAddress;

@@ -125,7 +125,7 @@ channel.close();
 利用SocketChannel和ServerSocketChannel实现客户端与服务器端简单通信：
 SocketChannel 用于创建基于tcp协议的客户端对象，因为SocketChannel中不存在accept()方法，所以，它不能成为一个服务端程序。通过 connect()方法 ，SocketChannel对象可以连接到其他tcp服务器程序。
 客户端:
-```
+```java
 package socketchannel;
 
 import java.io.IOException;
@@ -164,7 +164,7 @@ public class WebClient {
 ServerSocketChannel 允许我们监听TCP链接请求，通过ServerSocketChannelImpl的 accept()方法 可以创建一个SocketChannel对象用户从客户端读/写数据。
 
 服务端：
-```
+```java
 package socketchannel;
 
 import java.io.IOException;
@@ -311,4 +311,5 @@ write()方法内部会负责把数据按顺序写入到channel中。
 
 参考文章：
 《Netty官网》
+
 >https://www.jianshu.com/nb/18340870
