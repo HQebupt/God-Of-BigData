@@ -3,6 +3,7 @@
 尝试回答这几个问题？
 
 - Java的内存模型是怎样的，各个区存放着什么
+- 什么是happen-before
 - Java类加载过程讲一下
 - 什么是双亲委派机制，有没有实际的案列分析
 - 常见的垃圾回收算法有什么
@@ -127,3 +128,10 @@ Java 虚拟机中的 Stop-the-world 是通过安全点（safepoint）机制来�
 
 > Java 11 引入了 ZGC，宣称暂停时间不超过 10ms
 
+### 4 常见问题
+
+#### 4.1 happen-before是什么
+
+happen-before是Java内存模型对多线程可见性的规定规则。比如lock的操作顺序，volatile的读写顺序，线程各个步骤的执行顺序。
+
+- 具体实现上，为了保证多线程的可见性，是依赖于内存屏障（memory-Barrier）来禁止指令重排序，提供内存的可见性保证。这就实现了happen-before的规则。

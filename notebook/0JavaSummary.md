@@ -140,14 +140,172 @@
 
 ![img](0JavaSummary.assets/120290-1622708615286)
 
+```java
+   public V put(K key, V value) {
+            Segment<K,V> s;
+
+            if (value == null)
+                throw new NullPointerException();
+
+            int hash = hash(key);
+
+            // segmentMask：段掩码，假如segments数组长度为16，则段掩码为16-1=15；segments长度为32，段掩码为32-1=31
+            // segmentShift：2的sshift次方等于ssize，segmentShift=32-sshift
+            // 若segments长度为16，segmentShift=32-4=28
+            // 若segments长度为32，segmentShift=32-5=27, 而计算得出的hash值最大为32位，无符号右移segmentShift，
+            // 则意味着只保留高几位（其余位是没用的），然后与段掩码segmentMask位运算来定位Segment
+            int j = (hash >>> segmentShift) & segmentMask;
+            if ((s = (Segment<K,V>) UNSAFE.getObject          // nonvolatile; recheck
+                 (segments, (j << SSHIFT) + SBASE)) == null) //  in ensureSegment
+                s = ensureSegment(j);
+            return s.put(key, hash, value, false);
+	}
+```
 
 
-@jdk8 改为 CAS 设计，新增的 KV 对使用 CAS 尝试初次写入，写入失败则转变为加锁同步逻辑（锁升级优化）；增加 addCount 方法专门记录 size ；并发修改一个下标的 Node 时才加 synchronize ，并且只锁定当前的 Node
+
+@jdk8 改为 CAS 设计，更细力度地控制锁，①对于一个空的Node，CAS无锁添加；对于非空的Node，对Node加锁（synchronized，锁可以被优化）；增加 addCount 方法专门记录 size ；并发修改一个下标的 Node 时才加 synchronized ，并且只锁定当前的 Node
 
 - 取值操作不阻塞，因此与更新操作会有所重叠；取值操作反映最近正好已完成的更新，即这种反映遵循一种 happen-before 的关系；批量操作时，并发取值操作操作反映部分的插入、移除的结果，而非批量操作的整体完成后的结果；同理，迭代器操作反映的是迭代器创建那一刻的结果集
 - isEmpty、size、containsValue 只在 map 不并发更新的时候准确，适合用于监控或估算，而不适于程序控制；不支持 Null Key/Value
 - putVal
   - 计算 hash 值，自旋访问 table，table 为空则采用 CAS 初始化 table
   - 获取 hash 值对应节点位置 i，若该位置为空则 CAS 插入
-  - 若有线程在扩容，则先执行 helpTransfer 帮助迁移到新 table
+  - 若有HashMap在扩容，则先执行 helpTransfer 帮助迁移到新 table。会再次自旋进入循环体。
   - 否则，以当前节点的链表、树的头结点为 lock 加锁，进行 add 操作
+  
+  > 可以发现，和HashMap的putVal流程很类似，区别在于由于并发性，ConcurrentHashMap有CAS操作和synchronized。
+
+```java
+final V putVal(K key, V value, boolean onlyIfAbsent) {
+        if (key == null || value == null) throw new NullPointerException();
+        int hash = spread(key.hashCode()); // 1 计算hash值
+        int binCount = 0;
+        for (Node<K,V>[] tab = table;;) { // 1 自旋访问table
+            Node<K,V> f; int n, i, fh;
+            if (tab == null || (n = tab.length) == 0)
+                tab = initTable(); // 1 为空CAS初始化table
+            else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) { // 2 获取table中对应Node i位置，如果位置为空，直接CAS插入
+                if (casTabAt(tab, i, null,
+                             new Node<K,V>(hash, key, value, null)))
+                    break;                   // no lock when adding to empty bin
+            }
+            else if ((fh = f.hash) == MOVED) // 3 如果HashMap在扩容，执行helpTransfer迁移到新table
+                tab = helpTransfer(tab, f);
+            else { // 4 否则，说明一切正常，是链表Node就添加，是TreeNode也添加。因为是并发的map，所以这个地方加锁
+                V oldVal = null;
+                synchronized (f) {
+                    if (tabAt(tab, i) == f) {
+                        if (fh >= 0) {
+                            binCount = 1;
+                            for (Node<K,V> e = f;; ++binCount) {
+                                K ek;
+                                if (e.hash == hash &&
+                                    ((ek = e.key) == key ||
+                                     (ek != null && key.equals(ek)))) {
+                                    oldVal = e.val;
+                                    if (!onlyIfAbsent)
+                                        e.val = value;
+                                    break;
+                                }
+                                Node<K,V> pred = e;
+                                if ((e = e.next) == null) {
+                                    pred.next = new Node<K,V>(hash, key,
+                                                              value, null);
+                                    break;
+                                }
+                            }
+                        }
+                        else if (f instanceof TreeBin) {
+                            Node<K,V> p;
+                            binCount = 2;
+                            if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key,
+                                                           value)) != null) {
+                                oldVal = p.val;
+                                if (!onlyIfAbsent)
+                                    p.val = value;
+                            }
+                        }
+                    }
+                }
+                if (binCount != 0) {
+                    if (binCount >= TREEIFY_THRESHOLD)
+                        treeifyBin(tab, i);
+                    if (oldVal != null)
+                        return oldVal;
+                    break;
+                }
+            }
+        }
+        addCount(1L, binCount);
+        return null;
+    }
+```
+
+- get操作：比较简单，就是用key的hash值去命中Node。没有加锁，使用volatile来保证可见性。这就是所谓的弱一致性。
+
+```java
+    public V get(Object key) {
+        Node<K,V>[] tab; Node<K,V> e, p; int n, eh; K ek;
+        int h = spread(key.hashCode());
+        if ((tab = table) != null && (n = tab.length) > 0 &&
+            (e = tabAt(tab, (n - 1) & h)) != null) { // 1 用key的hash值去命中Node
+            if ((eh = e.hash) == h) {
+                if ((ek = e.key) == key || (ek != null && key.equals(ek)))
+                    return e.val;
+            }
+            else if (eh < 0) // 2 遇到resize，去寻找新的地方寻找key
+                return (p = e.find(h, key)) != null ? p.val : null;
+            while ((e = e.next) != null) { // 3 链表式查找
+                if (e.hash == h &&
+                    ((ek = e.key) == key || (ek != null && key.equals(ek))))
+                    return e.val;
+            }
+        }
+        return null;
+    }
+```
+
+##### size
+
+- 1.8中的 size 增加 baseCount、counterCells 来辅助记录 size，优化性能
+
+```java
+	/**
+     * Base counter value, used mainly when there is no contention,
+     * but also as a fallback during table initialization
+     * races. Updated via CAS.
+     */
+    private transient volatile long baseCount;
+
+    private transient volatile CounterCell[] counterCells;
+
+    /**
+     * A padded cell for distributing counts.  Adapted from LongAdder
+     * and Striped64.  See their internal docs for explanation.
+     */
+    @sun.misc.Contended static final class CounterCell {
+        volatile long value;
+        CounterCell(long x) { value = x; }
+    }
+```
+
+- put方法结束后，调用 addCount 方法以 CAS 的方式自增 baseCount，如果 CAS 失败则使用 CAS 记录到 counterCell 中
+
+```java
+	private final void addCount(long x, int check) {
+        CounterCell[] as; long b, s;
+        if ((as = counterCells) != null ||
+            !U.compareAndSwapLong(this, BASECOUNT, b = baseCount, s = b + x)) {
+            CounterCell a; long v; int m;
+            boolean uncontended = true;
+            if (as == null || (m = as.length - 1) < 0 ||
+                (a = as[ThreadLocalRandom.getProbe() & m]) == null ||
+                !(uncontended =
+                  U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))) {
+                fullAddCount(x, uncontended);
+                return;
+	......
+```
+
+* 如果记录 counterCell 的 CAS 失败则调用 fullAddCount 继续自旋 CAS 直到成功
