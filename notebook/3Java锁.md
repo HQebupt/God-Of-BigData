@@ -83,6 +83,8 @@ public final int getAndAddInt(Object o, long offset, int delta) {
 
 Monitor可以理解为一种同步机制。每一个Java对象就有一把看不见的锁，称为内部锁或者Monitor锁。
 
+<img src="3Java锁.assets/image-20210610101721136-1623291442906.png" alt="image-20210610101721136" style="zoom: 50%;" />
+
 Monitor是线程私有的数据结构，每一个线程都有一个可用monitor record列表，同时还有一个全局的可用列表。每一个被锁住的对象都会和一个monitor关联，同时monitor中有一个Owner字段存放拥有该锁的线程的唯一标识，表示该锁被这个线程占用。
 
 > 为什么Synchronized能实现线程同步？
