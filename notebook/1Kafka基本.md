@@ -455,13 +455,29 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 1. HW和 log endof offset 是什么？有什么作用？HW是以提交的位移最大值+1， Log End Offset是当前最新的消息位置。
    1. HW以下的消息是可见的，就是可以消费的
    2. HW和LEO帮助Kafka完成副本同步
+   
 2. Follower副本是如何同步的，或者Follower和Leader副本的HW和LEO是如何被更新的？
    1. 先要搞清楚，Leader和Follower副本的HW和LEO存储在哪里？他们被更新的时机是什么时候？LEO值最好理解。
    2. 然后简述其流程。
+   
 3. Leader Epoch引入解决的问题是什么？Leader 副本和Follower副本高水位的更新时间上会出现什么问题？
-   1. 场景1：前提是**Broker 端参数 min.insync.replicas 设置为 1**， 2台Broker同时宕机，原来低水位的Broker B先启动起来，kafka将它设置为leader，当以前的Leader的broker A 启动起来的时候，发现现在的HW是1，那么就截断自己的日志。那么这些被截断的日志就属于丢失的日志
-   2. 场景2：前提是一样的，2台Broker同时宕机，Broker A的HW = 2， Broker B的HW =1 ,还是Broker B先启动起来，它自然成为leader，然后它接受了一条生产消息，HW==> 2， 那么这个时候Broker A活过来了，它发现自己的HW和现在的leader的HW是一样的，那么就不会拉取消息。其实他们的第2条消息是不一致的，所以出现了消息不一致的情况。
-   3. Leader Epoch 如何解决case 1 和 case 2。每次活过来的follower去想Leader拉取Leader的LEO值，以这个值来作为判断是否做同步的标准。
+
+   1. 为什么？
+
+   2. 是什么？Leader Epoch是一种机制，一种概念。分为2个部分
+
+      - Epoch。一个单调增加的版本号。每当副本领导权发生变更时，都会增加该版本号。小版本号的 Leader 被认为是过期 Leader，不能再行使 Leader 权力。
+
+      - 起始位移（Start Offset）。Leader 副本在该 Epoch 值上写入的首条消息的位移。
+      - **每个分区都缓存 Leader Epoch 数据**，同时它还会定期地将这些信息持久化到一个 checkpoint 文件中
+
+   3. 做什么？
+
+   4. 场景1：前提是**Broker 端参数 min.insync.replicas 设置为 1**， 2台Broker同时宕机，原来低水位的Broker B先启动起来，kafka将它设置为leader，当以前的Leader的broker A 启动起来的时候，发现现在的HW是1，那么就截断自己的日志。那么这些被截断的日志就属于丢失的日志
+
+   5. 场景2：前提是一样的，2台Broker同时宕机，Broker A的HW = 2， Broker B的HW =1 ,还是Broker B先启动起来，它自然成为leader，然后它接受了一条生产消息，HW==> 2， 那么这个时候Broker A活过来了，它发现自己的HW和现在的leader的HW是一样的，那么就不会拉取消息。其实他们的第2条消息是不一致的，所以出现了消息不一致的情况。
+
+   6. Leader Epoch 如何解决case 1 和 case 2。每次活过来的follower去Leader拉取Leader的LEO值，以这个值来作为判断是否做同步的标准。
 
 
 
