@@ -74,51 +74,76 @@ Reduce阶段：
 
 ## 2 HDFS
 
+### 2.0 HDFS 文件大小如何选择
+
+ block，1.x是64M，2.x/3.x是128M。大公司都是用256M。总的来说， 取决于磁盘的传输速度。
+
+- 设置太小：会增加寻找这个到这个block的时间。（寻址时间）
+- 设置太大：传输这个块的时间会大于定位这个块在哪里的时间。导致处理这个块的时间比较长。
+
 ### 2.1 HDFS的存储机制（☆☆☆☆☆）
 
   HDFS存储机制，包括HDFS的**写入数据过程**和**读取数据过程**两部分
   **HDFS写数据过程**
 
-![image-20210610202942511](5Hadoop面试.assets/image-20210610202942511-3328184.png)
+![image-20210614202947791](5Hadoop面试.assets/image-20210614202947791-3673788.png)
 
-  1）客户端通过Distributed FileSystem模块向NameNode请求上传文件，NameNode检查目标文件是否已存在，父目录是否存在。
-  2）NameNode返回是否可以上传。
-  3）客户端请求第一个 block上传到哪几个datanode服务器上。
-  4）NameNode返回3个datanode节点，分别为dn1、dn2、dn3。
-  5）客户端通过FSDataOutputStream模块请求dn1上传数据，dn1收到请求会继续调用dn2，然后dn2调用dn3，将这个通信管道建立完成。
-  6）dn1、dn2、dn3逐级应答客户端。
-  7）客户端开始往dn1上传第一个block（先从磁盘读取数据放到一个本地内存缓存），以packet为单位，dn1收到一个packet就会传给dn2，dn2传给dn3； dn1每传一个packet会放入一个应答队列等待应答。
-  8）当一个block传输完成之后，客户端再次请求NameNode上传第二个block的服务器。（重复执行3-7步）。
+（1）客户端通过Distributed FileSystem模块向NameNode请求上传文件，NameNode检查目标文件是否已存在，父目录是否存在。
+
+（2）NameNode返回是否可以上传。
+
+（3）客户端请求第一个 Block上传到哪几个DataNode服务器上。
+
+（4）NameNode返回3个DataNode节点，分别为dn1、dn2、dn3。
+
+（5）客户端通过FSDataOutputStream模块请求dn1上传数据，dn1收到请求会继续调用dn2，然后dn2调用dn3，将这个通信管道建立完成。
+
+（6）dn1、dn2、dn3逐级应答客户端。
+
+（7）客户端开始往dn1上传第一个Block（先从磁盘读取数据放到一个本地内存缓存），以Packet为单位，dn1收到一个Packet就会传给dn2，dn2传给dn3；**dn1每传一个packet会放入一个应答队列ACK等待应答。**
+
+（8）当一个Block传输完成之后，客户端再次请求NameNode上传第二个Block的服务器。（重复执行3-7步）。
+
+> 在HDFS写数据的过程中，NameNode会选择距离待上传数据最近距离的DataNode接收数据。那么这个最近距离怎么计算呢？
+>
+> 节点距离：两个节点到达最近的共同祖先的距离总和。
 
   **HDFS读数据过程**
 
-[![img](https://github.com/wangzhiwubigdata/God-Of-BigData/raw/master/%E9%9D%A2%E8%AF%95%E7%B3%BB%E5%88%97/pics/Hadoop%E9%9D%A2%E8%AF%95%E9%A2%98Pics/HDFS%E8%AF%BB%E6%95%B0%E6%8D%AE%E6%B5%81%E7%A8%8B.png)](https://github.com/wangzhiwubigdata/God-Of-BigData/blob/master/面试系列/pics/Hadoop面试题Pics/HDFS读数据流程.png)
+![image-20210614203319421](5Hadoop面试.assets/image-20210614203319421-3674000.png)
 
 
 
+  1）客户端通过DistributedFileSystem向NameNode请求下载文件，NameNode通过查询元数据，找到文件块所在的DataNode地址。
 
+（2）挑选一台DataNode（就近原则，然后随机）服务器，请求读取数据。
 
-  1）客户端通过Distributed FileSystem向NameNode请求下载文件，NameNode通过查询元数据，找到文件块所在的DataNode地址。
-  2）挑选一台DataNode（就近原则，然后随机）服务器，请求读取数据。
-  3）DataNode开始传输数据给客户端（从磁盘里面读取数据输入流，以packet为单位来做校验）。
-  4）客户端以packet为单位接收，先在本地缓存，然后写入目标文件。
+（3）DataNode开始传输数据给客户端（从磁盘里面读取数据输入流，以Packet为单位来做校验）。
 
-### 2.2 secondary namenode工作机制（☆☆☆☆☆）
+（4）客户端以Packet为单位接收，先在本地缓存，然后写入目标文件。
 
-![image-20210610203324312](5Hadoop面试.assets/image-20210610203324312-3328406-3328467.png)
+### 2.2 Namenode启动过程（☆☆☆☆☆）
 
+![image-20210614203657862](5Hadoop面试.assets/image-20210614203657862-3674219.png)
 
+![image-20210614223501592](5Hadoop面试.assets/image-20210614223501592-3681303.png)
 
 **1）第一阶段：NameNode启动**
-  （1）第一次启动NameNode格式化后，创建fsimage和edits文件。如果不是第一次启动，直接加载edit log和fsimage到内存。
-  （2）客户端对元数据进行增删改的请求。
-  （3）NameNode记录操作日志，更新滚动日志。
-  （4）NameNode在内存中对数据进行增删改查。
-**2）第二阶段：Secondary NameNode工作**
+（1）第一次启动NameNode格式化后，创建Fsimage和Edits文件。如果不是第一次启动，直接加载Edit日志和Fsimage文件到内存。
+
+（2）客户端对元数据进行增删改的请求。
+
+（3）(先写日志)NameNode记录操作日志，更新滚动日志。
+
+（4）（后更新内存数据）NameNode在内存中对元数据进行增删改。
+
+
+
+**2）第二阶段：Secondary NameNode工作**（有了NN HA之后，已经被抛弃了。）
   （1）Secondary NameNode询问NameNode是否需要checkpoint。直接带回NameNode是否检查结果。
   （2）Secondary NameNode请求执行checkpoint。
   （3）NameNode滚动正在写的edits日志。
-  （4）将滚动前的编辑日志和镜像文件拷贝到Secondary NameNode。
+  （4）将滚动前的Edit日志和Fsimage文件拷贝到Secondary NameNode。
   （5）Secondary NameNode加载编辑日志和镜像文件到内存，并合并。
   （6）生成新的镜像文件fsimage.chkpoint。
   （7）拷贝fsimage.chkpoint到NameNode。
@@ -176,7 +201,95 @@ ZKFailoverController主要职责
   3）当宕机的NN新启动时，它会再次注册zookeper，发现已经有znode锁了，便会自动变为Standby状态，如此往复循环，保证高可靠，需要注意，目前仅仅支持最多配置2个NN。
   4）master选举：如上所述，通过在zookeeper中维持一个短暂类型的znode，来实现抢占式的锁机制，从而判断那个NameNode为Active状态
 
+### 2.6 DataNode的工作机制
+
+![image-20210614204253729](5Hadoop面试.assets/image-20210614204253729-3674576.png)
+
+（1）一个数据块在DataNode上以文件形式存储在磁盘上，包括两个文件，一个是数据本身，一个是元数据包括数据块的长度，块数据的校验和，以及时间戳。
+
+（2）DataNode启动后向NameNode注册，通过后，周期性（6小时）的向NameNode上报所有的块信息。
+
+（3）心跳是每3秒一次，心跳返回结果带有NameNode给该DataNode的命令如复制块数据到另一台机器，或删除某个数据块。如果超过10分钟没有收到某个DataNode的心跳，则认为该节点不可用。
+
+（4）集群运行中可以安全加入和退出一些机器。
+
+**DataNode 源码启动过程**
+
+![image-20210614223746446](5Hadoop面试.assets/image-20210614223746446-3681467.png)
+
 ## 3 YARN
+
+### 3.0 基础结构
+
+- ResourceManager
+- NodeManager
+- Application Master
+- Container
+
+![image-20210614204650087](5Hadoop面试.assets/image-20210614204650087-3674812.png)
+
+### 3.0 Yarn工作机制（提交一个作业给Yarn）
+
+
+
+![image-20210614204837057](5Hadoop面试.assets/image-20210614204837057-3674919.png)
+
+- **Client申请资源，创建MR Application Master**
+  - Client向RM申请Application; RM 回应给你
+  - Client向HDFS上传所需资源，比如jar包、配置文件、分片信息
+  - Client向RM申请运行Application Master；RM回应，让某一个节点生成并且运行一个ApplicationMaster
+- **Application Master启动Map和Reduce任务**
+  - AppMaster向RM申请Map Task资源；RM回应给你，帮你创建Map Container
+  - AppMaster发送启动任务的命令，这样Map Container就跑起来了
+  - Map 跑完了，Reduce 任务在这样申请一次。
+- **Map和Reduce任务**
+  - Map跑完
+  - Reduce任务会去拉取Map Task拉取数据，进行计算。
+  - 都跑完了，AppMaster向RM注销自己。
+
+![image-20210614223921704](5Hadoop面试.assets/image-20210614223921704-3681564.png)
+
+**作业提交全过程详解**
+（1）作业提交
+第1步：Client调用job.waitForCompletion方法，向整个集群提交MapReduce作业。
+第2步：Client向RM申请一个作业id。
+第3步：RM给Client返回该job资源的提交路径和作业id。
+第4步：Client提交jar包、切片信息和配置文件到指定的资源提交路径。
+第5步：Client提交完资源后，向RM申请运行MrAppMaster。
+（2）作业初始化
+第6步：当RM收到Client的请求后，将该job添加到容量调度器中。
+第7步：某一个空闲的NM领取到该Job。
+第8步：该NM创建Container，并产生MRAppmaster。
+第9步：下载Client提交的资源到本地。
+（3）任务分配
+第10步：MrAppMaster向RM申请运行多个MapTask任务资源。
+第11步：RM将运行MapTask任务分配给另外两个NodeManager，另两个NodeManager分别领取任务并创建容器。
+（4）任务运行
+第12步：MR向两个接收到任务的NodeManager发送程序启动脚本，这两个NodeManager分别启动MapTask，MapTask对数据分区排序。
+第13步：MrAppMaster等待所有MapTask运行完毕后，向RM申请容器，运行ReduceTask。
+第14步：ReduceTask向MapTask获取相应分区的数据。
+第15步：程序运行完毕后，MR会向RM申请注销自己。
+（5）进度和状态更新
+YARN中的任务将其进度和状态(包括counter)返回给应用管理器, 客户端每秒(通过mapreduce.client.progressmonitor.pollinterval设置)向应用管理器请求进度更新, 展示给用户。
+（6）作业完成
+
+	更加细节的步骤：
+	（0）MR程序提交到客户端所在的节点。
+	（1）YarnRunner向ResourceManager申请一个Application。
+	（2）RM将该应用程序的资源路径返回给YarnRunner。
+	（3）该程序将运行所需资源提交到HDFS上。
+	（4）程序资源提交完毕后，申请运行mrAppMaster。
+	（5）RM将用户的请求初始化成一个Task。
+	（6）其中一个NodeManager领取到Task任务。
+	（7）该NodeManager创建容器Container，并产生MRAppmaster。
+	（8）Container从HDFS上拷贝资源到本地。
+	（9）MRAppmaster向RM 申请运行MapTask资源。
+	（10）RM将运行MapTask任务分配给另外两个NodeManager，另两个NodeManager分别领取任务并创建容器。
+	（11）MR ApplicationMaster向两个接收到任务的NodeManager发送程序启动脚本，这两个NodeManager分别启动MapTask，MapTask对数据分区排序。
+	（12）MrAppMaster等待所有MapTask运行完毕后，向RM申请容器，运行ReduceTask。
+	（13）ReduceTask向MapTask获取相应分区的数据。
+	（14）程序运行完毕后，MR会向RM申请注销自己。	
+	
 
 ### 3.1HDFS的数据压缩算法?（☆☆☆☆☆）
 
@@ -302,7 +415,7 @@ public void reduce(Text key, Iterator<Text> values,
 ### 4.3 HDFS小文件优化方法（☆☆☆☆☆）
 
 **1）HDFS小文件弊端：**
-  HDFS上每个文件都要在namenode上建立一个索引，这个索引的大小约为150byte，这样当小文件比较多的时候，就会产生很多的索引文件，一方面会大量占用namenode的内存空间，另一方面就是索引文件过大是的索引速度变慢。
+  HDFS上每个文件都要在namenode上建立一个索引，这个索引的大小约为150byte，这样当小文件比较多的时候，就会产生很多的索引文件，一方面会大量占用namenode的内存空间，另一方面就是索引文件过大是的索引速度变慢。128G内存可以存储9亿的文件数据信息
 **2）解决的方式：**
 
 - Hadoop本身提供了一些文件压缩的方案。   
