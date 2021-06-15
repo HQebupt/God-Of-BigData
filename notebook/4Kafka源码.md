@@ -182,5 +182,15 @@ recovery 使用场景：Broker在启动的时候，会把所有的Log Segment文
 
 
 
+#### 1.2 Log是如何加载log segment的？
 
+![image-20210614161716507](4Kafka源码.assets/image-20210614161716507-3658638.png)
+
+Kafka定义的文件类型有哪些？.index .log .timeindex .txnindex , 还有.swap .cleaned .snapshot .deteled
+
+- .swap 和 .clean 是日志做campaction的中间产物
+- .deteled 删除日志文件。（异步）
+- .snapshot 事务相关的文件
+
+maybeIncrementHighWatermark 有什么作用？当leader收到follower所有提交的(HW,LEO)后，会判断是否更新高水位。
 
