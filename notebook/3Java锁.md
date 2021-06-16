@@ -89,7 +89,7 @@ Monitor是线程私有的数据结构，每一个线程都有一个可用monitor
 
 > 为什么Synchronized能实现线程同步？
 
-synchronized通过Monitor来实现线程同步，Monitor是依赖于底层的操作系统的Mutex Lock（互斥锁）来实现的线程同步。
+**synchronized通过Monitor来实现线程同步，Monitor是依赖于底层的操作系统的Mutex Lock（互斥锁）来实现的线程同步。**
 
 > 为什么 JDK 6之前synchronized效率低？
 
@@ -579,3 +579,161 @@ ReentrantLock和ReentrantReadWriteLock的源码，独享锁和共享锁都是通
 > 反向思考：ReentrantLock里面的公平锁和非公平锁获取的时候，`tryAcquire` `nonfairTryAcquire` 他们是独占锁还是共享锁？
 
 Refer:[Java锁事](https://tech.meituan.com/2018/11/15/java-lock.html)
+
+### 7 信号量Semaphore
+
+操作系统的信号量是一种概念，Java的信号量是一种实现。
+
+- **信号量是一个被线程共享的非负变量。是一个发信号的机制。**一个等待一个信号量的线程可以被其他线程通知（signal）。这个机制通过 wait 和 signal 两个原子操作（atomic operations）来实现进程同步。
+
+- 互斥锁其实是一个对象。Mutex的全称是Mutual Exclusion Object，也就是**互斥锁是一个互斥对象。它是一种特殊的二进位信号量（binary semaphore）**，用来控制访问共享区域资源。它包括一个优先级继承机制，以避免扩展的优先级反转问题。它允许当前优先级较高的任务在阻塞状态下维持的时间尽可能的少。然而，优先级继承并不能完全避免优先级反转，而只会最小化其影响。
+
+- 
+
+  作者：雨幻逐光
+  链接：https://www.jianshu.com/p/5852efef0ea8
+  来源：简书
+  著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。
+
+#### 信号量和互斥锁的不同点
+
+|参数|信号量|互斥锁|
+|---|---|---|
+|机制|**是一种发信号的机制（signaling mechanism）**| **是一种锁机制** |
+| 数据类型 | **信号量是一个整型变量** | **斥锁是一个对象** |
+| 修改| 等待（wait）和发信号（signal）操作可以修改信号量  | 互斥锁只有当进程请求访问一块资源或释放占用某块资源的时候被修改 |
+| 资源管理 | 如果没有空闲资源，此时请求资源的进程将执行等待操作（wait operation）。它将一直等待直到信号量的计数大于0 | 如果互斥锁是锁住的状态，进程只能等待。进程将被置于队列中进行排队。只有当互斥锁被解锁后才能访问资源 |
+| 线程| 可以拥有多个线程  | 可以拥有多个线程，但是多个线程不是同时进行的  |
+| 所有权 | 任一进程释放或者获取资源时，计数将被改变 | 锁对象只能被当前获取到钥匙的进程释放（即工作线程）|
+| 类型| 信号量有两种类型，二进位信号量和计数信号量| 互斥锁没有子类型  |
+| 操作| 信号量的值可以通过等待和发信号两个操作来修改 | 互斥锁有锁上（locked）和解锁（unlocked）两个操作|
+| 资源占用 | 如果所有资源都被占用，此时请求资源的进程将执行wait（）操作并阻塞自身，直到信号量计数>1，占有被释放的资源 | 如果对象已被锁定，则请求资源的进程将等待，并在释放锁定之前由系统进行排队 |
+| 优缺点 | 信号量可以灵活管理资源；缺点是编程复杂，容易出现死锁。 |  |
+
+Refer [雨幻逐光](https://www.jianshu.com/p/5852efef0ea8)
+
+```java
+/*A counting semaphore. Conceptually, a semaphore maintains a set of permits. Each acquire blocks if necessary until a permit is available, and then takes it. Each release adds a permit, potentially releasing a blocking acquirer. However, no actual permit objects are used; the Semaphore just keeps a count of the number available and acts accordingly.
+Semaphores are often used to restrict the number of threads than can access some (physical or logical) resource. For example, here is a class that uses a semaphore to control access to a pool of items:*/
+  
+ class Pool {
+   private static final int MAX_AVAILABLE = 100;
+   private final Semaphore available = new Semaphore(MAX_AVAILABLE, true);
+
+   public Object getItem() throws InterruptedException {
+     available.acquire();
+     return getNextAvailableItem();
+   }
+
+   public void putItem(Object x) {
+     if (markAsUnused(x))
+       available.release();
+   }
+
+   // Not a particularly efficient data structure; just for demo
+
+   protected Object[] items = ... whatever kinds of items being managed
+   protected boolean[] used = new boolean[MAX_AVAILABLE];
+
+   protected synchronized Object getNextAvailableItem() {
+     for (int i = 0; i < MAX_AVAILABLE; ++i) {
+       if (!used[i]) {
+          used[i] = true;
+          return items[i];
+       }
+     }
+     return null; // not reached
+   }
+
+   protected synchronized boolean markAsUnused(Object item) {
+     for (int i = 0; i < MAX_AVAILABLE; ++i) {
+       if (item == items[i]) {
+          if (used[i]) {
+            used[i] = false;
+            return true;
+          } else
+            return false;
+       }
+     }
+     return false;
+   }
+ }
+```
+
+- Java 信号量还是AQS实现
+
+```java
+public class Semaphore implements java.io.Serializable {
+    /** All mechanics via AbstractQueuedSynchronizer subclass */
+    private final Sync sync;
+
+    /**
+     * Synchronization implementation for semaphore.  Uses AQS state
+     * to represent permits. Subclassed into fair and nonfair
+     * versions.
+     */
+    abstract static class Sync extends AbstractQueuedSynchronizer {
+        private static final long serialVersionUID = 1192457210091910933L;
+
+        Sync(int permits) {
+            setState(permits);
+        }
+
+        final int getPermits() {
+            return getState();
+        }
+
+        final int nonfairTryAcquireShared(int acquires) {
+            for (;;) {
+                int available = getState();
+                int remaining = available - acquires;
+                if (remaining < 0 ||
+                    compareAndSetState(available, remaining))
+                    return remaining;
+            }
+        }
+
+        protected final boolean tryReleaseShared(int releases) {
+            for (;;) {
+                int current = getState();
+                int next = current + releases;
+                if (next < current) // overflow
+                    throw new Error("Maximum permit count exceeded");
+                if (compareAndSetState(current, next))
+                    return true;
+            }
+        }
+
+        final void reducePermits(int reductions) {
+            for (;;) {
+                int current = getState();
+                int next = current - reductions;
+                if (next > current) // underflow
+                    throw new Error("Permit count underflow");
+                if (compareAndSetState(current, next))
+                    return;
+            }
+        }
+
+        final int drainPermits() {
+            for (;;) {
+                int current = getState();
+                if (current == 0 || compareAndSetState(current, 0))
+                    return current;
+            }
+        }
+    }
+
+
+    /**
+     * Creates a Semaphore with the given number of
+     * permits and nonfair fairness setting.
+     */
+    public Semaphore(int permits) {
+        sync = new NonfairSync(permits);
+    }
+}
+```
+
+
+

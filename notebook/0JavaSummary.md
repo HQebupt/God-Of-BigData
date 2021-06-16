@@ -309,3 +309,284 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
 ```
 
 * 如果记录 counterCell 的 CAS 失败则调用 fullAddCount 继续自旋 CAS 直到成功
+
+###  分布式原理和zookeeper
+
+- CAP
+  - 一致性、可用性（**有限时间**内**返回结果**）、分区容错性（部分子网络故障不会导致整个系统不可用）
+    - 一致性分为
+      - 强一致性
+      - 单调一致性 (用户一旦读到某个数据在某次更新后的值，就不会再读到比这个值更旧的值)
+      - 会话一致性（TODO)
+      - 最终一致性
+      - 弱一致性
+    - 可用性
+      - 从实践的角度来看，即服务是否在任何时刻都可以不超时地响应请求（排除网络超时）
+
+- BASE
+  - Basically Available（响应时间增加、功能部分损失如降级）、Soft state（允许不同节点数据副本之间进行数据带来的延迟）、Eventually consistent（数据经过一段时间同步后最终能到达一个一致的状态）
+
+#### 2PC
+
+- 阶段1 提交事务请求（投票阶段）：
+  - 事务询问（proposer）
+  - 执行事务，记录undo、redo（acceptor）
+  - 各参与者向协调者反馈事务询问响应（acceptor）
+- 阶段2 执行事务提交
+  - 假如所有参与者反馈都是yes，则执行事务提交
+    1. 发送commit请求（proposer）
+    2. 事务commit（acceptor）
+    3. 反馈事务commit结果（acceptor）
+    4. 完成事务（proposer）
+  - 假如任何一个参与者反馈no，则执行中断事务
+    1. 发送rollback请求（proposer）
+    2. 事务rollback（acceptor）
+    3. 反馈事务rollback结果（acceptor）
+    4. 中断事务（proposer）
+- 存在的问题：同步阻塞、单点问题、脑裂（致使数据不一致）、过于保守（少量节点失败导致整体提交失败）（TODO，实际实现一下）
+
+#### 3PC
+
+- 改进2PC的提交事务请求阶段，变成三个阶段：
+
+  - CanCommit
+    1. 事务问询（proposer）
+    2. 各个参与者向协调者反馈事务询问的响应（acceptor）
+  - PreCommit
+    1. 发送预提交请求（proposer）
+    2. 事务预提交（acceptor）
+    3. 各参与者向协调者反馈事务预执行的相应ack/abort（acceptor）
+    4. 若任何一个参与者反馈no，则中断事务（proposer）
+       - 发送中断请求abort（proposer）
+       - 中断事务（acceptor）
+  - do Commit，一旦进入此阶段，即使协调者出现问题或网络故障，参与者都会在等待超时之后继续提交事务
+    1. 发送提交请求（proposer）
+    2. 事务提交（acceptor）
+    3. 反馈事务提交结果（acceptor）
+    4. 完成事务（proposer）
+    5. 若协调者正常工作且任意一个参与者反馈no，则中断事务（proposer）
+       - 发送中断请求（proposer）
+       - 事务回滚（acceptor）
+       - 反馈事务回滚结果（acceptor）
+       - 中断事务（proposer）
+
+- 优缺点
+
+  1. 将commit确认和实际commit拆分，降低了参与者阻塞范围，单点故障后，仍然可继续达成一致
+  2. 但是preCommit阶段网络故障依然会导致不一致问题（TODO)
+
+  
+
+#### Paxos (consensus, not consistency) TODO,而且没总结完
+
+- 三个角色：Proposer、Acceptor、Learner，具体实现中，一个进程可能充当不止一种角色
+
+- 通过不断加强这个约束：“在一次Paxos算法执行实例中，只批准一个value”，获得了 Paxos 算法
+
+  - P1：一个Acceptor必须接受（Accept）它收到的第一个提案
+
+  - P2：一旦一个具有 vn 的提案被批准（chosen），那么之后批准（chosen）的提案必须具有 vn
+
+  - P2a：一旦一个具有 vn 的提案被批准（chosen），那么之后任何acceptor再次接受（accept）的提案必须具有 vn
+
+  - P2b：一旦一个具有 vn 的提案被批准（chosen），那么以后任何proposer提出的提案必须具有 vn
+
+  - P2c
+
+    ：如果一个编号为 n 的提案具有 v ，该提案被提出（issued），那么存在一个多数派S：
+
+    - 要么 S 中所有 Acceptor 都没有接受（accept）编号 < n 的任何提案
+    - 要么 S 中所有 Acceptor 已经接受（accept）的编号 < n 的某个提案，而已接收的编号最大的提案的值为 v
+
+  - **P1a**：当且仅当 acceptor 没有回应过编号大于 n 的 prepare 请求时，acceptor 接受（accept）编号为 n 的提案
+
+- proposer 生成提案
+
+  - prepare 阶段
+    - proposer 选择一个新的提案编号 n ，然后发送请求给 acceptor 集合，并要求其作如下承诺：
+      - acceptor 收到 prepare 请求后，如果提案的编号大于它已经回复过的所有 prepare 消息(**回复消息表示接受 accept**)，则 acceptor 将自己上次接受的提案回复给 proposer，并承诺不再回复小于 n 的提案
+    - 举例说明：
+      - 假设一个 acceptor 已经响应过（accept）所有的 prepare 请求，对应提案编号为 1、2、3、...、7，那么 acceptor 接收到编号为 8 的 prepare 请求会，就会将编号为 7 的提案作为响应反馈给 proposer
+  - accept 阶段
+    - 当一个 proposer 收到了多数 acceptors 对 prepare 的回复后，就进入批准（accept）阶段
+    - proposer 要向回复 prepare 请求的 acceptors 发送 accept 请求，包括编号 n 和根据 P2c 决定的 value（如果根据P2c没有已经接受的value，那么它可以自由决定value）
+    - 只要 acceptor 尚未对编号大于 n 的 prepare 请求响应，就可以通过这个提案
+
+- acceptor 批准提案
+
+  - prepare 请求：acceptor 可以在任何时候响应一个 prepare 请求
+  - accept 请求：在不违背 acceptor 现有承诺的前提下，可以任意响应 Accept 请求（一个 acceptor 只要尚未响应任何编号大于 n 的 Prepare 请求，那么它就可以接受这个编号为 n 的提案）
+
+- learner 提案获取（解决单个proposer向大量节点同步数据引起的性能问题）
+
+  - 选取一批 learner 集合作为主 learner 集，acceptor 将批准的提案发送给这个集合，这个集合的每个 learner 可以在一个提案被选定后通知所有其他的 learner
+
+- 算法伪代码
+
+![img](0JavaSummary.assets/120555.jpeg)
+
+#### Raft Consensus Algorithm（TODO未总结）
+
+#### ZAB（ZooKeeper Atomic Broadcast）
+
+- 定义
+  - leader、followers：Zookeeper 集群中，一个节点充当 leader 角色，其余皆为 follower. 
+    - leader职责是接受所有客户端请求，协调内部各个服务器。 
+    - follower职责是处理客户端非事务请求，参与Proposal的投票和leader选举。
+  - transactions：leader 将客户端变更传播给 follower（TODO）
+  - 'e'：leader 的纪元 / epoch（任期、term等类似概念）. 纪元是一个整型，leader 当选时的纪元必须比之前的leader纪元要大（TODO）
+  - 'c'：一个由 leader 生成的有序数值，从 0 开始并单调递增. 这个值和 epoch 一并用于给接收到的客户端状态变更请求排序（二者通过位运算共同构成 ZXID ）（TODO）
+  - 'F.history'：follower 的历史队列，用于提交按顺序接收到的事务（TODO）
+  - 待决事务：一组位于 F.history 中的事务，其序列号小于当前提交的序列号（TODO）
+
+- ZAB 所需前提
+  1. 复制担保
+     - 可靠投递：如果事务 M 被一台服务器提交（commit），其终将被所有服务器提交
+     - 全局有序：如果事务 A 于事务 B 之前被一台服务器提交，在所有其他服务器上 A 也将先于B被提交. 如果 A 和 B 都被提交，要么 A 先于 B 被提交，要么 B 先于 A 被提交（不存在同时提交）
+     - 因果有序：如果事务 B 在事务 A 提交之后被 sender B 发送，那么 A 的顺序必须在 B 之前. 如果一个sender先发送 B 后发送 C，那么 C 的顺序必须排在 B 之后.（逻辑顺序不受物理条件影响，比如发送端的顺序和接收端最终提交的顺序必须一致）
+  2. 只要大多数（quorum）nodes 已启动，事务就会被复制
+  3. 若 node 故障但随后又重启，它应能追上故障期间已经复制完成的事务
+
+
+
+##### 具体实现有2种模式
+
+- 消息广播复制(2PC的变种)
+  - 客户端读取任何一个 Zookeeper 节点
+  - 客户端将状态变更写入任何一个 Zookeeper 节点，这个状态变更就会被转发到主（leader）节点
+  - Zookeeper 使用一个两阶段提交协议的变种来实现事务复制到 follower
+    1. 当 leader 接收到客户端的修改更新请求，它就生成带有序列号 c 和 leader epoch的事务，并发送给所有follower ( leader)
+    2. follower 将事务添加到自己的 history queue 中并回复 leader 一个 ACK (follower)
+    3. 当 leader 接收到一组 quorum 的 ACK 后，它就向 quorum 发送这个事务的 commit 请求(leader)
+    4. follower 会在收到 commit 请求后就提交事务，除非 follower 本地的 history queue 中事务的序列号都低于 c（即历史事务早于当前事务），这时，它将一直等待直到所有早先的事务（待解决事务）的 commit 请求都接收到并处理完成后，才去提交当前的事务 (follower)
+
+<img src="0JavaSummary.assets/120353.png" alt="img" style="zoom:67%;" />
+
+- 集群崩溃恢复
+
+  - 当 leader 崩溃时，所有节点一起执行一个通用的一致恢复协议，之后集群恢复日常运作，确立一个新的 leader 来广播状态变更
+
+  - 要充当 leader 角色，节点必须由一组 quorum nodes 的支持. 由于节点随时可能崩溃和恢复，随着时间推移会产生多个 leader，事实上一个节点可能充当一个角色数次
+
+  - 节点的生命周期：每个节点一次执行协议的一个迭代，任何时候，一个进程可以中断当前迭代，跳转到 Phase 0 重新开始
+
+    - Phase 0：选举（election）
+    - Phase 1：发现（discovery）
+    - Phase 2：同步（synchronization）
+    - Phase 3：广播（broadcast）
+
+  - Phase 1 和 2 对于集群内的相互一致性很重要，尤其是从故障中恢复时
+
+  - Phase 1 发现（摘要：从 quorum 中找到最完备的 F.history）
+
+    - follower 和即将当选的 leader 通信，以便让 leader 收集信息知悉follower最近接收到的事务
+    - 这个步骤的目的是发现 quorum 中接收最多的变更序列，并开启新的纪元 epoch = e' 以免先前的leader提交它们的提议（proposal）
+    - quorum 拥有先前 leader 发送的所有变更，因此可以做出保证：quorum中至少有一个节点（其 epoch 最大或 epoch 不小于其他跟随者而 lastZxid 最大）的 history queue 中包含先前 leader 发送的所有变更，这同时也意味着新的 leader 也会拥有这些变更
+
+    ![img](../120367.png)
+
+    > 注：理论上被选举出来的 prospective leader 应具有最大的 zxid，即接收了最新的事务，为什么还要向 quorum 中的 follower 获取历史事务？
+
+  - Phase 2 同步（摘要：将'发现'步骤中获得的 F.history 作为提案提出）
+
+    - '同步步骤'使用 leader 的历史更新事务副本来同步，这些事务在'发现步骤'中从集群中获得，同步完成后，整个协议的恢复（recovery）阶段结束 
+    - leader 和 follower 通信，将历史事务拿出来作为提案提出（leader）
+    - 如果 follower 自身的事务历史序列落后于 leader 的，follower 就认可 leader 的提议（follower）
+    - 当 leader 收到 quorum 的确认，它就分发提交（commit）消息至 quorum，此时 leader 就宣称确立，不再是潜在状态（leader）
+
+  ![img](0JavaSummary.assets/120365.png)
+  
+
+  - Phase 3 广播
+    - 如没有崩溃发生，节点永久地停留在这个阶段，一旦客户端发起一个写请求，节点就执行事务广播（leader）
+    - 对于 observer，leader 会发送 inform 消息，其中包含提议的内容（follower）
+
+![img](0JavaSummary.assets/120363.png)
+
+> 为了检测故障，ZAB 在 leader 和 follower 之间使用定期的心跳消息通信. 如果leader 在一段时间内没有收到 quorum（majority）的心跳，它就放弃自己自己的 leader 身份，将状态切换成选举和 Phase 0. 如果 follower 在一段时间内也没收到 leader 的心跳，就跳转到 Leader Election Phase.
+
+- ZXID
+  - ZXID 低 32 位为自增计数，高 32 位代表了 Leader 周期 epoch 编号
+  - 当选举出一个新的 Leader 时，就会从这个 leader 本地日志中去的最大事务提议的 ZXID，解析出对应的 epoch 值再自加 1，以此作为新的 ZXID 的高 32 位，低 32 位则从 0 开始
+
+#### Zookeeper简介
+
+- 特性：顺序一致性（主要是写操作的严格顺序性，每个更新请求都会分配一个全局唯一的递增编号）、原子性、单一视图（Single System Image）、可靠性（只要集群中有超过一半的机器能工作整个集群就能对外提供服务）、实时性（ZK将全量数据存储在内存中，因此适合读操作为主的应用场景）
+- 三种角色：Leader、Follower、Observer，Leader 提供读写，Follower 和 Observer 只提供读服务，Observer 不参与 Leader 选举过程，也不参与写操作的“过半写成功”策略，因此 Observer 可以不影响写性能的情况下提升集群读性能
+  - leader职责是接受所有客户端请求，协调内部各个服务器。 
+  - follower职责是处理客户端非事务请求，参与Proposal的投票和leader选举。
+  - observer职责是处理客户端非事务请求，不参与投票。（为什么这么设计？）
+
+- session管理(TODO)
+
+  - 三个状态：CONNECTING、CONNECTED、CLOSE
+  - SessionID生成
+
+  ```
+      long nextSid = 0;
+      nextSid = (System.currentTimeMillis() << 24) >> 8;
+      nextSid = nextSid | (id << 56);
+      return nextSid;
+  ```
+
+  - 会话管理采用分同策略，将类似的会话方在同一区块中进行管理，以便ZK对会话进行不同区块的隔离处理以及同一区块的统一处理，分配原则是每个会员的“下次超时时间点”：`ExpirationTime = ((CurrentTime + SessionTimeout) / ExpirationInterval + 1) * ExpirationInterval`
+
+  ![img](0JavaSummary.assets/120061.png)
+
+  - 客户端在会话超时时间过期范围内向服务器发PING保持会话有效性（心跳检测）
+    - 服务端则需要接受客户端的PING并按需激活会话（TouchSession），将会话迁移到新的区块内
+    - 客户端发现在SessionTimeout / 3的时间内未和服务端通信，则发起一次PING触发服务端激活session
+    - 服务端SessionTracker有一个单独的线程专门进行会话超时检查，以ExpirationInterval作为时间点来触发检查，每次检查就检查过期的桶中所有剩下的未被迁移的会话即可
+  - 当客户端与服务端网络断开，客户端会自动反复重连直到连上集群中的一台机器，如果在会话超时时间内重新连上，则状态改为 *CONNECTED*（CONNECTION_LOSS），如果超过超时时间才连上，则为 *EXPIRED*（SESSION_EXPIRED）
+
+- ZAB Leader选举(面试重点：ZAB的领导者选举过程 TODO)
+  - 服务器状态
+    - LOOKING：Leader 选举阶段
+    - FOLLOWING：跟随者状态
+    - LEADING：领导者状态
+    - OBSERVING：观察者状态
+  - 选票数据结构
+    - logicClock：每个服务器维护一个自增整数，表示该服务器发起的第几轮投票
+    - state：服务器当前状态
+    - self_id：服务器的 myid
+    - self_zxid：服务器上接收到的事务的最大 zxid
+    - vote_id：被推举的服务器 myid
+    - vote_zxid：被推举的服务器上保存的事务的最大 zxid
+  - 投票流程
+    - 自增选举轮次
+      - 一次有效的投票必须在同一轮次中，开始新一轮投票时，服务器先对自己的logicClock自增
+    - 初始化选票
+      1. 服务器广播自己的选票前，先将自己的投票箱清空
+      2. 投票箱用于记录收到的选票，如：服务器2投票给服务器3，服务器3投票给服务器1，则服务器1的投票箱内将存储(2, 3)，(3, 1)，(1, 1)
+      3. 票箱中只记录投票者的最后一票，如投票者A更新自己的选票，其他服务器收到该选票后会在更新票箱中A的选票
+    - 发起初始化选票
+      - 每个服务器最开始通过广播把票投给自己
+    - 接收外部投票
+      - 服务器尝试从其他服务器获得投票，计入自己的投票箱内
+      - 如果无法获得任何外部选票，则确认自己是否与集群中其他的服务器保持着有效的连接；如果是则再次发送自己的投票；否则马上建立连接
+    - 判断选举轮次
+      - 收到外部投票后，首先根据投票信息中所包含的 logicClock 来进行不同处理：
+        1. 外部投票的 logicClock 大于自身的 logicClock，说明该服务器的选举轮次落后于其他服务器，立即清空自己的投票箱，并把自己的 logicClock 更新为接收到的 logicClock，然后再对比自己之前的投票与收到的投票以确定是否需要变更自己的投票，最终再次将自己的投票广播出去
+        2. 外部投票的 logicClock 小于自身的 logicClock，当前服务器直接忽略该选票，继续处理下一个投票
+        3. 外部投票的 logickClock 自身的相等，则进行选票 PK
+    - 选票PK
+      - 选票 PK 基于（self_id, self_zxid）与（vote_id, vote_zxid）的对比
+        1. 外部投票的 logicClock 大于自身的，则将自己的 logicClock 及自己的选票的 logicClock 变更为收到的 logicClock
+        2. 若 logicClock 一致，则对比二者的 vote_zxid，若外部投票的 vote_zxid 比较大，则将自己的票中的 vote_zxid 与 vote_myid 更新为收到的票中的 vote_zxid 和 vote_myid 并广播出去，另外将收到的票以及自己更新后的票放入自己的票箱. 如果票箱内已存在（self_myid, self_zxid）相同的选票，则直接覆盖
+        3. 若二者的 vote_zxid 一致，则比较二者的 vote_myid，若外部的投票的 vote_myid 比较大，则将自己的票种的 vote_myid 更新为收到的票种的 vote_myid 并广播出去，另外将受到的票以及自己更新后的票放入自己的票箱
+    - 统计选票
+      - 如果已经确定过半服务器认可了自己的投票（可能是更新后的投票），则投票终止；否则继续接受其他服务器的投票
+    - 更新服务器状态
+      - 投票终止后，服务器开始更新自身状态. 若过半票投给了自己，则将自己的服务器状态更新为LEADING，否则将自己的状态更新为 FOLLOWING
+
+- 数据同步
+  - 几个定义
+    - peerLastZXID：learner 服务器最后处理的 ZXID
+    - miniCommittedLog：leader outstanding proposals queue committedLog 中最小的 ZXID
+    - maxCommittedLog：leader outstanding proposals queue committedLog 中最大的 ZXID
+  - 直接差异化同步（DIFF同步）：peerLastZXID ∈ (minCommittedLog, maxCommittedLog)
+  - 先回滚在差异化同步（TRUNC+DIFF同步），用于Leader宕机时没有成功发起 roposal 但已经将事务记录到本地事务日志中，这时重启服务后，需要先回滚，再做DIFF同步：peerLastZXID ∉ F.history
+  - 全量同步（SNAP同步）：peerLastZxid < minCommittedLog || (leader.outstandingProposalsQueue == null && peerLastZXID != lastProcessedZXID)
+
+<img src="0JavaSummary.assets/121186.png" alt="img" style="zoom:120%;" />
+
