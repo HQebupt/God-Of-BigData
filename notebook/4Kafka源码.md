@@ -194,3 +194,125 @@ Kafka定义的文件类型有哪些？.index .log .timeindex .txnindex , 还有.
 
 maybeIncrementHighWatermark 有什么作用？当leader收到follower所有提交的(HW,LEO)后，会判断是否更新高水位。
 
+#### 1.3 Log对象的常见操作
+
+![image-20210616083322626](4Kafka源码.assets/image-20210616083322626-3803604.png)
+
+##### 高水位值
+
+```scala
+// 高水位值的定义
+@volatile private var highWatermarkMetadata: LogOffsetMetadata = LogOffsetMetadata(logStartOffset) // volatile LogOffsetMetadata类型，初始值是logStartOffset
+
+/*
+ * A log offset structure, including: LogOffsetMetata包含三个类型：
+ *  1. the message offset （消息位移值）
+ *  2. the base message offset of the located segment （segment的起始位移值）
+ *  3. the physical position on the located segment（该位移值所在的物理磁盘位置）
+ */
+case class LogOffsetMetadata(messageOffset: Long,
+                             segmentBaseOffset: Long = Log.UnknownOffset,
+                             relativePositionInSegment: Int = LogOffsetMetadata.UnknownFilePosition)
+```
+
+- 高水位值的获取
+  - 读取时日志不能被关闭
+  - 没有获得完整的高水位值，就通过读取日志，来构造一个高水位；同时更新它
+
+```scala
+private def fetchHighWatermarkMetadata: LogOffsetMetadata = {
+    checkIfMemoryMappedBufferClosed()
+
+    val offsetMetadata = highWatermarkMetadata 
+    if (offsetMetadata.messageOffsetOnly) {
+      lock.synchronized {
+        val fullOffset = convertToOffsetMetadataOrThrow(highWatermark)
+        updateHighWatermarkMetadata(fullOffset)
+        fullOffset
+      }
+    } else {
+      offsetMetadata
+    }
+  }
+```
+
+- 更新高水位值
+  - 高水位一定在[Log Start Offset, Log End Offset]之间
+  - 有2个方法，一个用来Follower更新高水位；一个用来Leader更新高水位。
+
+```scala
+def updateHighWatermark(hw: Long): Long = {
+    val newHighWatermark = if (hw < logStartOffset)
+      logStartOffset
+    else if (hw > logEndOffset)
+      logEndOffset
+    else
+      hw
+    updateHighWatermarkMetadata(LogOffsetMetadata(newHighWatermark))
+    newHighWatermark
+  }
+
+def maybeIncrementHighWatermark(newHighWatermark: LogOffsetMetadata): Option[LogOffsetMetadata] = {
+    lock.synchronized {
+      val oldHighWatermark = fetchHighWatermarkMetadata
+
+      // Ensure that the high watermark increases monotonically. We also update the high watermark when the new
+      // offset metadata is on a newer segment, which occurs whenever the log is rolled to a new segment.
+      if (oldHighWatermark.messageOffset < newHighWatermark.messageOffset ||
+        (oldHighWatermark.messageOffset == newHighWatermark.messageOffset && oldHighWatermark.onOlderSegment(newHighWatermark))) {
+        updateHighWatermarkMetadata(newHighWatermark)
+        Some(oldHighWatermark)
+      } else {
+        None
+      }
+    }
+  }
+```
+
+##### 日志段管理：ConcurrentSkipListMap
+
+```scala
+private val segments: ConcurrentNavigableMap[java.lang.Long, LogSegment] = new ConcurrentSkipListMap[java.lang.Long, LogSegment] // 线程安全，可排序的Map
+```
+
+利用跳表的操作来实现增删改查。
+
+1. 添加addSegment
+2. 删除：根据留存策略来删除
+   - 基于时间
+   - 基于空间
+   - 基于LogStartOffset
+3. 修改：直接利用Map的put特性，进行替换。
+4. 查询：利用ConcurrentSkipListMap来实现
+   - segments.firstEntry
+   - segments.lastEntry
+   - segments.highEntry
+   - segments.floorEntry
+
+##### LEO的更新时机
+
+1. 日志初始化时候
+2. 写入新消息的时候
+3. Log对象切分（Log Roll）的时候，一旦当前写入的日志段满了，就创建1个全新的日志段对象。
+4. 日志截断的时候（Truncate）
+
+##### 写操作
+
+- appendAsLeader：写leader副本
+- appendAsFollower：Follower同步副本的时候
+
+<img src="4Kafka源码.assets/image-20210616092934646-3806976.png" alt="image-20210616092934646" style="zoom:50%;" />
+
+
+
+##### 读操作
+
+```scala
+def read(startOffset: Long,
+           maxLength: Int,
+           isolation: FetchIsolation,
+           minOneMessage: Boolean): FetchDataInfo 
+```
+
+- isolation:读取设置的级别，主要控制能够读取的最大位移值。是幂等的，还是事务的，还是普通的，多用于kafka事务。
+
