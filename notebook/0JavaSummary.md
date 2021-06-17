@@ -310,7 +310,7 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
 
 * 如果记录 counterCell 的 CAS 失败则调用 fullAddCount 继续自旋 CAS 直到成功
 
-###  分布式原理和zookeeper
+###  4分布式原理和zookeeper
 
 - CAP
   - 一致性、可用性（**有限时间**内**返回结果**）、分区容错性（部分子网络故障不会导致整个系统不可用）
@@ -590,3 +590,32 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
 
 <img src="0JavaSummary.assets/121186.png" alt="img" style="zoom:120%;" />
 
+## 5 框架知识Netty
+
+1. Netty 是什么？Netty 的特点是什么？
+
+2. Netty 的优势有哪些？为什么要用  Netty？
+
+3. Netty 的应用场景有哪些？
+
+   
+
+4. BIO、NIO和AIO的区别？NIO的组成？
+
+5. Netty的线程模型？Netty 核心组件有哪些？分别有什么作用？
+
+6. EventloopGroup 了解么?和 EventLoop 啥关系? Bootstrap 和 ServerBootstrap 了解么？
+
+
+
+1. NIOEventLoopGroup源码？NioEventLoopGroup 默认的构造函数会起多少线程？
+2. Netty 服务端和客户端的启动过程了解么？默认情况  Netty 起多少线程？何时启动？
+3. Netty 发送消息有几种方式？
+
+
+
+1. Netty 高性能表现在哪些方面？什么是  Netty 的零拷贝？
+2. TCP 粘包/拆包的原因及解决方法？
+3. 了解哪几种序列化协议？如何选择序列化协议？
+4. Netty 支持哪些心跳类型设置？Netty 长连接、心跳机制了解么？
+5. Netty 和 Tomcat 的区别？

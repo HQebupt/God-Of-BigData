@@ -19,6 +19,8 @@
 1. 阶段1：等待数据就绪。网络 I/O 的情况就是等待远端数据陆续抵达；磁盘I/O的情况就是等待磁盘数据从磁盘上读取到内核态内存中。
 2. 阶段2：数据拷贝。出于系统安全,用户态的程序没有权限直接读取内核态内存,因此内核负责把内核态内存中的数据拷贝一份到用户态内存中。
 
+![image-20210617111208137](1IO模型.assets/image-20210617111208137-1623899529599.png)
+
 recvfrom 可以从java程序中理解调用了read()
 
 - 用户态：用户启动的 cs CPU
@@ -26,6 +28,9 @@ recvfrom 可以从java程序中理解调用了read()
 - 拷贝数据，由系统态拷贝到用户态的内存。
 
 ### 0.2 非阻塞IO
+
+![image-20210617111402891](1IO模型.assets/image-20210617111402891-1623899644267.png)
+
 1. socket 设置为 NONBLOCK（非阻塞）就是告诉内核，当I/O 请求操作无法完成时，返回一个错误码(EWOULDBLOCK) ，这样请求线程就不会阻塞
 2. 请求线程将不断的请求数据是否已经准备好，如果没有准备好，继续请求，直到数据准备好为止。整个 I/O 请求的过程中，虽然用户线程每次发起 I/O 请求后可以立即返回，但是为了等到数据，仍需要不断地轮询、重复请求，消耗了大量的 CPU 的资源
 3. 数据准备好了，从内核拷贝到用户空间，注意，这里copy数据的过程仍然要阻塞请求线程
@@ -33,6 +38,9 @@ recvfrom 可以从java程序中理解调用了read()
 - 处理并发，调用系统调用的时候，不受阻塞，但是有返回结果 数据是否准备好。
 
 ### 0.3 IO多路复用
+
+![img](1IO模型.assets/aHR0cHM6Ly91c2VyLWdvbGQtY2RuLnhpdHUuaW8vMjAxOC8xMS8xLzE2NmNjYmJjZmJhNTNjMGE-1623900177294)
+
 1. 多路复用是指单个线程就可以同时处理多个网络连接的IO。原理就是select/epoll会不断的轮询所负责的socket，以注册和监听为基础，当某个socket有数据到达了，就通知用户线程
 2. 用户线程会阻塞在select方法上
 
@@ -42,8 +50,18 @@ recvfrom 可以从java程序中理解调用了read()
 
 > 用户调用select是阻塞的，java是以epoll的底层的。
 
-### 0.4 -5 异步IO
-信号驱动IO不常用，忽略。
+### 0.4  信号驱动I/O
+
+- 信号驱动I/O：开启套接口信号驱动 I/O 功能，通过系统的调用 sigaction 执行信号处理函数；当数据准备就绪时，就位该进程生成一个 SIGIO 新型号，通过信号回调通知应用程调用 recvfrom 读取数据
+
+![image-20210617111423701](1IO模型.assets/image-20210617111423701-1623899664935.png)
+
+### 0.5异步I/O
+
+![image-20210617111554414](1IO模型.assets/image-20210617111554414-1623899755685.png)
+
+- 异步I/O：告知内核启动某个操作，并让内核在整个操作完成后（包括将数据从内核复制到用户缓冲区）通知应用程序；与信号驱动模型的区别在于信号驱动 I/O 由内核通知何时可以开始一个 I/O 操作；异步 I/O 由内核通知 I/O 操作何时完成
+
 1. 调用 aio_read 函数，告诉内核描述字，缓冲区指针，缓冲区大小，文件偏移以及通知的方式（需要内核的支持，2.6+）
 2. 整个数据准备和拷贝过程，用户线程都没有阻塞
 3. 数据拷贝完成后，内核会通知用户程序。用户程序则可以直接使用了
@@ -85,9 +103,9 @@ recvfrom 可以从java程序中理解调用了read()
 
 数据读取和写入操作图示：
 
-![image-20210610213812006](1IO模型.assets/image-20210610213812006-3332293.png)
+<img src="1IO模型.assets/image-20210610213812006-3332293.png" alt="image-20210610213812006" style="zoom:67%;" />
 
-![image-20210610213655280](1IO模型.assets/image-20210610213655280-3332217.png)
+<img src="1IO模型.assets/image-20210610213655280-3332217.png" alt="image-20210610213655280" style="zoom:67%;" />
 
 ### 1.1Channel & Buffer
 1. channel理解成建立连接的那根管道
@@ -114,7 +132,7 @@ recvfrom 可以从java程序中理解调用了read()
 ## 3.经典网络服务结构设计
 ### 3.0 古老的模型
 每一个handler都是在自己的线程中启动和运行，如常用的线程池的方式来处理请求。
-![img](1IO模型.assets/780676-20190727140921602-1770136470-3332901.png)
+<img src="1IO模型.assets/780676-20190727140921602-1770136470-3332901.png" alt="img" style="zoom:67%;" />
 
 Reactor也可以称作反应器模式，它有以下几个特点：
 
@@ -126,12 +144,13 @@ Reactor也可以称作反应器模式，它有以下几个特点：
 
 ### 3.1 Basic Reactor Design: Reactor单线程模型
 
-![单线程](1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-3332737.png)
+<img src="1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-3332737.png" alt="单线程" style="zoom:67%;" />
+
 - Acceptor ：只建立连接
 - Reactor线程：只有一个，负责对worker进行处理。
 
 ### 3.2 ThreadPool Reactor Design: Reactor多线程模型
-![多线程](1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-20210610215139535-3333101.png)
+<img src="1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-20210610215139535-3333101.png" alt="多线程" style="zoom:67%;" />
 
 - Acceptor1个，只接受连接
 - Reactor线程1个：只处理IO请求
@@ -140,21 +159,36 @@ Reactor也可以称作反应器模式，它有以下几个特点：
 ### 3.3 Multiple Reactors: Reactor主从模型
 ![多reactor多worker线程模式](1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-20210610215316058-3333199.png)
 
-<img src="1IO模型.assets/image-20210610220144975-3333706.png" alt="image-20210610220144975" style="zoom:50%;" />
+<img src="1IO模型.assets/image-20210610220144975-3333706.png" alt="image-20210610220144975" style="zoom: 80%;" />
 
-- Acceptor：变成了mainReactor线程，专门负责建立连接。---boss  NIOEventGroup（Netty）
-- subReactor 线程：一个或者多个，专门处理IO请求。---worker NIOEventGroup（Netty）
-- worker 线程池：专门处理**非IO请求**
+- Acceptor：变成了mainReactor线程，专门负责建立连接。--bossGroup NioEventLoopGroup
+- subReactor 线程：一个或者多个，专门处理IO请求。--workerGroup NioEventLoopGroup
+- worker 线程池：专门处理**非IO请求** -- 具体实现上，和subReactor在同一个线程池中。
+> Netty的线程模型基于主从Reactor多线程，借用了MainReactor和SubReactor的结构，但是实际实现上，SubReactor和Worker线程在同一个线程池中：
+>
 > 利用主从Reactor 线程模型，可以根据IO和CPU计算的需要，合理地调节subReactor和worker线程数量。因此，在Netty的官方demo中，推荐使用该线程模型。
 
----
-## 4.Netty
+下面是一段Netty 构造Reactor线程模型的方法。
+
+```java
+EventLoopGroup bossGroup = new NioEventLoopGroup();
+EventLoopGroup workerGroup = new NioEventLoopGroup();
+ServerBootstrap server = new ServerBootstrap();
+server.group(bossGroup, workerGroup)
+ .channel(NioServerSocketChannel.class)
+```
+
+- bossGroup线程池则只是在bind某个端口后，获得其中一个线程作为MainReactor，专门处理端口的accept事件，每个端口对应一个boss线程
+- workerGroup线程池会被各个SubReactor和worker线程充分利用
+  
+
+## 4.Netty是什么
 Netty是一个高性能、**异步事件驱动的NIO**框架，它提供了对TCP、UDP和文件传输的支持。
 - 作为一个异步NIO框架，Netty的所有IO操作都是**异步非阻塞**的，通过`Future-Listener`机制，用户可以方便的主动获取或者通过通知机制获得IO操作结果
 
 
 ### 4.1Netty的线程模型是实现了主从多Reactor模型
-![img](1IO模型.assets/v2-b765a01640d2d47d39068de214b4003e_1440w-3333943.jpg)
+<img src="1IO模型.assets/v2-b765a01640d2d47d39068de214b4003e_1440w-3333943.jpg" alt="img" style="zoom:50%;" />
 
 
 
@@ -169,22 +203,22 @@ Netty是一个高性能、**异步事件驱动的NIO**框架，它提供了对TC
 Netty架构按照Reactor模式设计和实现，它的服务端通信序列图如下：
 
 - 图2-3 NIO服务端通信序列图
-![image](http://cdn.infoqstatic.com/statics_s2_20161220-0322/resource/articles/netty-high-performance/zh/resources/0529013.png)
+![Java 与 Netty 实现高性能高并发4](1IO模型.assets/3428d704872cf63d953900e01930beb71612518230576-1623897040892)
 
 - 客户端通信序列图如下：
-![image](http://cdn.infoqstatic.com/statics_s2_20161220-0322/resource/articles/netty-high-performance/zh/resources/0529014.png)
+![Java 与 Netty 实现高性能高并发5](1IO模型.assets/508d1f500c1f6ba1115af0fd480d2fe41612518230577-1623897057940)
 
 Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同时并发处理成百上千个客户端Channel，由于读写操作都是非阻塞的，这就可以充分提升IO线程的运行效率，避免由于频繁IO阻塞导致的线程挂起。
 
 另外，由于Netty采用了异步通信模式，一个IO线程可以并发处理N个客户端连接和读写操作，这从根本上解决了传统同步阻塞IO一连接一线程模型，架构的性能、弹性伸缩能力和可靠性都得到了极大的提升。
 
-### 4.2 Netty的“零拷贝”主要体现在如下三个方面：
+### 4.2 Netty的“零拷贝”主要体现在如下三个方面
 
-1. Netty的接收和发送`ByteBuffer`采用`DIRECT BUFFERS`，使用堆外直接内存进行`Socket`读写，不需要进行字节缓冲区的二次拷贝。如果使用传统的堆内存（HEAP BUFFERS）进行Socket读写，JVM会将内核内存Buffer拷贝一份到用户内存中，然后才写入Socket中，在发送数据的时候的时候，多了2次内存拷贝。
+1. Netty的接收和发送`ByteBuffer`采用`DIRECT BUFFERS`，使用堆外直接内存进行`Socket`读写，不需要进行字节缓冲区的二次拷贝。如果使用传统的堆内存（HEAP BUFFERS）进行Socket读写，JVM会将内核内存Buffer拷贝一份到用户内存中，然后才写入Socket中，在发送数据的时候的时候，多了2次内存拷贝。**(减少用户态和内核态的对象拷贝)**
 
-2. Netty提供了组合Buffer对象，可以聚合多个ByteBuffer对象，用户可以像操作一个Buffer那样方便的对组合Buffer进行操作，避免了传统通过内存拷贝的方式将几个小Buffer合并成一个大的Buffer。
+2. Netty提供了组合Buffer对象，可以聚合多个ByteBuffer对象，用户可以像操作一个Buffer那样方便的对组合Buffer进行操作，避免了传统通过内存拷贝的方式将几个小Buffer合并成一个大的Buffer。**（减少在用户态中，对象与对象的拷贝）**
 
-3. Netty的文件传输采用了FileChannel的transferTo方法，它可以直接将文件缓冲区的数据发送到目标Channel，避免了传统通过循环write方式导致的内存拷贝问题。
+3. Netty的文件传输采用了FileChannel的transferTo方法，它可以直接将文件缓冲区的数据发送到目标Channel，避免了传统通过循环write方式导致的内存拷贝问题。**(减少用户态和内核态的对象拷贝)**
 
 > 从这个角度来看，与Kafka的零拷贝，原理类似，都节约了2次 用户内存-内核内存的拷贝。
 - Kafka是使用文件Channel的transferTo方法，zeroCopy，不经过内核内存的缓冲区。
@@ -205,7 +239,7 @@ Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同
 为了尽可能提升性能，Netty采用了串行无锁化设计，在IO线程内部进行串行操作，避免多线程竞争导致的性能下降。表面上看，串行化设计似乎CPU利用率不高，并发程度不够。但是，**通过调整NIO线程池的线程参数，可以同时启动多个串行化的线程并行运行，这种局部无锁化的串行线程设计相比一个队列-多个工作线程模型性能更优。**
 
 Netty的串行化设计工作原理图如下：
-![image](http://cdn1.infoqstatic.com/statics_s1_20161220-0322/resource/articles/netty-high-performance/zh/resources/0529035.png)
+![img](1IO模型.assets/20201030234018206-1623897237235.png)
 
 Netty的`NioEventLoop`读取到消息之后，直接调用`ChannelPipeline`的`fireChannelRead(Object msg)`，只要用户不主动切换线程，一直会由NioEventLoop调用到用户的Handler，期间不进行线程切换，这种串行化处理方式避免了多线程操作导致的锁的竞争，从性能角度看是最优的。
 
@@ -236,3 +270,11 @@ Netty默认提供了对Google Protobuf的支持，通过扩展Netty的编解码�
 3) 软中断：如果Linux内核版本支持RPS（2.6.35以上版本），开启RPS后可以实现软中断，提升网络吞吐量。RPS根据数据包的源地址，目的地址以及目的和源端口，计算出一个hash值，然后根据这个hash值来选择软中断运行的cpu，从上层来看，也就是说将每个连接和cpu绑定，并通过这个hash值，来均衡软中断在多个cpu上，提升网络并行处理性能。
 
 Netty在启动辅助类中可以灵活的配置TCP参数，满足不同的用户场景。有相关配置接口定义.
+
+## 5 总结
+
+Netty\Kafka\Yarn的RPC框架都是基于Reactor模式实现的。gRPC是基于Netty实现的。
+
+- todo 自己实现Reactor模式的RPC
+- 
+
