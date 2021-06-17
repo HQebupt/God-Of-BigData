@@ -171,23 +171,62 @@ Reactor也可以称作反应器模式，它有以下几个特点：
 下面是一段Netty 构造Reactor线程模型的方法。
 
 ```java
-EventLoopGroup bossGroup = new NioEventLoopGroup();
-EventLoopGroup workerGroup = new NioEventLoopGroup();
-ServerBootstrap server = new ServerBootstrap();
-server.group(bossGroup, workerGroup)
- .channel(NioServerSocketChannel.class)
+    EventLoopGroup bossGroup = new NioEventLoopGroup();
+    EventLoopGroup workerGroup = new NioEventLoopGroup();
+    try {
+    	ServerBootstrap b = new ServerBootstrap();
+        b.group(bossGroup, workerGroup)
+        .channel(NioServerSocketChannel.class)
+        .option(...)
+        .handler(...)
+        .childHandler(...);
+    }
 ```
 
-- bossGroup线程池则只是在bind某个端口后，获得其中一个线程作为MainReactor，专门处理端口的accept事件，每个端口对应一个boss线程
-- workerGroup线程池会被各个SubReactor和worker线程充分利用
-  
+- bossGroup用于处理TCP连接。获得其中一个线程作为MainReactor，专门处理端口的accept事件
+  - 接收客户端TCP连接初始化Channel参数
+  - 将链路状态变更时间通知给ChannelPipeline
+- workerGroup用于处理I/O操作。被各个SubReactor和worker线程充分利用
+  - 异步读取数据报发送事件到ChannelPipeline
+  - 异步发送消息到通信对端，调用ChannelPipeline的消息发送接口
+  - 执行系统调用Task、定时执行任务Task
+- 通过调整线程池的线程个数、是否共享线程池等方式，Netty的Reactor模型可以在单线程、多线程和主从多线程之间切换
+
+```java
+		EventLoopGroup nioEventLoop = new NioEventLoopGroup(...); 
+		// 单线程：EventLoopGroup nioEventLoop = new NioEventLoopGroup(1) 
+		// 多线程：EventLoopGroup nioEventLoop = new NioEventLoopGroup(1) 
+		// 主从多线程：就是写bossGroup和workerGroup
+        ServerBootstrap b = new ServerBootstrap();
+        b.group(nioEventLoop).channel(NioServerSocketChannel.class);
+        b.option(ChannelOption.SO_BACKLOG, 1024)
+                .localAddress(Integer.parseInt(port))
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childOption(ChannelOption.ALLOCATOR, new PooledByteBufAllocator(true));
+        b.childHandler(new ChannelInitializer<SocketChannel>() {
+            @Override
+            protected void initChannel(SocketChannel ch) {
+                ...
+            }
+        });
+        ChannelFuture f = b.bind().sync();
+        f.channel().closeFuture().sync();
+```
+
+##### Netty线程模型最佳实践
+
+1. 创建两个 NioEventLoopGroup 隔离 NIO Acceptor 和 NIO I/O
+2. 尽量不在 ChannelHandler 中启动用户线程（用户线程是指的是在Reactor模式之外的业务线程）
+3. 解码要放在 NIO 线程调用的解码 Handler 中进行，不要切换到用户线程中
+4. 如果业务逻辑简单，没有阻塞、数据库操作、网络操作等，直接在 NIO 线程上完成业务逻辑而不要切换到用户线程
+5. 如果业务逻辑复杂，则尽快释放 NIO 线程，交由用户业务线程处理
 
 ## 4.Netty是什么
 Netty是一个高性能、**异步事件驱动的NIO**框架，它提供了对TCP、UDP和文件传输的支持。
 - 作为一个异步NIO框架，Netty的所有IO操作都是**异步非阻塞**的，通过`Future-Listener`机制，用户可以方便的主动获取或者通过通知机制获得IO操作结果
 
 
-### 4.1Netty的线程模型是实现了主从多Reactor模型
+### 4.1主从多Reactor模型
 <img src="1IO模型.assets/v2-b765a01640d2d47d39068de214b4003e_1440w-3333943.jpg" alt="img" style="zoom:50%;" />
 
 
@@ -223,7 +262,7 @@ Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同
   - NioSocketChannel，异步的客户端 TCP Socket 连接
   - NioServerSocketChannel，异步的服务器端 TCP Socket 连接
 
-- **EventLoop 的主要作用实际就是负责监听网络事件并调用事件处理器进行相关 I/O 操作的处理。**比如NioEventLoop 是它的一个实现。**NioEventLoop 维护了一个线程和任务队列**，支持异步提交执行任务，线程启动时会调用NioEventLoop的run方法，执行I/O任务和非I/O任务：
+- **EventLoop 的主要作用实际就是负责监听网络事件并调用事件处理器进行相关 I/O 操作的处理。**比如NioEventLoop 是它的一个实现。**每个 NioEventLoop 中包含了一个 NIO Selector、一个队列、一个线程**，支持异步提交执行任务，线程启动时会调用NioEventLoop的run方法，执行I/O任务和非I/O任务：
   - I/O任务 即selectionKey中ready的事件，如accept、connect、read、write等，由processSelectedKeys方法触发。
   - 非IO任务 添加到taskQueue中的任务，如register0、bind0等任务，由runAllTasks方法触发。
 
@@ -233,7 +272,7 @@ Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同
 
 <img src="1IO模型.assets/aHR0cHM6Ly91c2VyLWdvbGQtY2RuLnhpdHUuaW8vMjAxOC8xMS8xLzE2NmNjYmJkYzlhN2NhYmU" alt="服务端Netty Reactor工作架构图" style="zoom: 67%;" />
 
-- NioEventLoopGroup：主要管理EventLoop的生命周期，可以理解为一个线程池，内部维护了一组线程，每个线程(NioEventLoop)负责处理多个Channel上的事件，而一个Channel只对应于一个线程。
+- NioEventLoopGroup：主要管理EventLoop的生命周期，可以理解为一个线程池，内部维护了一组线程，每个线程(NioEventLoop)负责处理多个Channel上的事件，而一个Channel只对应于一个线程。（NioEventLoopGroup是 Netty 对线程池的一种实现，可更高效地进行多线程处理、并发、控制流）
 
 - Bootstrap、ServerBootstrap
   Bootstrap意思是引导，一个Netty应用通常由一个Bootstrap开始，主要作用是配置整个Netty程序，串联各个组件，Netty中Bootstrap类是客户端程序的启动引导类，ServerBootstrap是服务端启动引导类。
@@ -289,6 +328,78 @@ Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同
 
 出站事件由上下方向处理，如图右侧所示。 出站Handler处理程序通常会生成或转换出站传输，例如write请求。 I/O线程通常执行实际的输出操作，例如SocketChannel.write（ByteBuffer）。
 
+### 4.2 重要的数据结构（TODO)
+
+- ByteBuf
+
+  - 可被自定义的缓冲区类型扩展，内置符合缓冲区类型实现透明零拷贝，容量按需增长，读写之间切换不需调用 ByteBuffer 的 flip 方法，读写使用不同索引，支持方法链式调用，支持引用计数，支持池化
+  - ByteBuf 和 ByteBufHolder 均实现了 ReferenceCounted，引用计数
+  - ByteBufAllocator 用于分配 ByteBuf，使用了池化技术
+
+- Channel
+
+  - Channel：Socket 类，实现操作如 bind()、connect()、read()、write()等，具体实现类有EmbeddedChannel、LocalServerChannel、NioDatagramChannel、NioSctpChannel、NioSocketChannel 等
+  - 在 Netty4 中，Channel 和 EventLoop 的关系如图
+
+  <img src="1IO模型.assets/image-20210617173127706-1623922289013.png" alt="image-20210617173127706" style="zoom:67%;" />
+
+  
+
+ - ChannelHandler、ChannelPipeline
+     - ChannelFuture：异步通知
+
+     - ChannelHandler、ChannelPipeline
+       - ChannelHandler 是应用程序逻辑容器，如 ChannelInboundHandler、ChannelOutboundHandler
+       - ChannelPipeline 提供 ChannelHandler 链，当 Channel 被创建时会自动分配到专属的 ChannelPipeline
+       - ChannelHandler 的编排顺序由添加的顺序所决定，ChannelInboundHandler 按照注册的先后顺序执行；ChannelOutboundHandler 按照注册的先后顺序逆序执行；Netty 能区分 Inbound 和 Outbound，并确保数据只会在具有相同定向类型的两个 ChannelHandler 之间传递
+       
+       ```JAVA
+       	ChannelPipeline p = ...;
+           p.addLast(new RedisDecoder()); // InboundHandler
+           p.addLast(new RedisEncoder()); // OutboundHandler
+           p.addLast(new RedisBulkStringAggregator()); // InboundHandler
+           p.addLast(new RedisArrayAggregator()); // InboundHandler
+           p.addLast(new RedisServerHandler()); // InboundHandler
+       ```
+       
+       - ChannelHandlerAdapter，用户只需实现其关心的方法
+       - ChannelHandler 的默认实现：ChannelHandlerAdapter、ChannelInboundHandlerAdapter、ChannelOutboundHandlerAdapter、ChannelDuplexHandler；编解码默认实现：ByteToMessageDecoder、ByteToByteEncoder
+
+- ChannelHandlerContext
+
+  - 作为参数传递到每个方法，Netty 中发送消息可以直接写到 Channel 中，也可以写到ChannelHandlerContext 中，前者导致消息从 ChannelPipeline 尾端流动，后者导致消息从 ChannelPipeline 中下一个 ChannelHandler 流动
+  - Channel、ChannelPipeline、ChannelHandlerContext 之间的关系
+
+  ![image-20210617173709482](1IO模型.assets/image-20210617173709482-1623922631019.png)
+
+- EventLoopGroup、EventLoop
+
+  - EventLoop 是 Netty 对线程池的一种实现，可更高效地进行多线程处理、并发、控制流
+
+    ![image-20210617174122328](1IO模型.assets/image-20210617174122328-1623922883519.png)
+
+    - 每个 NioEventLoop 中包含了一个 NIO Selector、一个队列、一个线程
+    - 其中线程用来做轮询注册到 Selector 上的 Channel 的读写事件和对投递到队列里面的事件进行处理
+    - 当 NettyServer 启动时候会注册监听套接字通道 NioServerSocketChannel 到 boss 线程池组中的某一个 NioEventLoop 管理的 Selector 上，然后其对应的线程则会负责轮询该监听套接字上的连接请求
+    - 当客户端发来一个连接请求时候，boss 线程池组中注册了监听套接字的 NioEventLoop 中的 Selector 会读取读取完成了 TCP 三次握手的请求，然后创建对应的连接套接字通道 NioSocketChannel，然后把其注册到 worker 线程池组中的某一个 NioEventLoop 中管理的一个 NIO Selector 上，然后该连接套接字通道 NioSocketChannel 上的所有读写事件都由该 NioEventLoop 管理
+    - 每个 NioEventLoop 中会管理多个客户端（M:N）发来的连接，然后通过循环轮询处理每个连接的读写事件
+
+- 在netty4中
+
+  - 所有的IO操作和事件都由已经分配了的EventLoop的Thread执行，一个Channel的整个生命周期都由同一个线程负责，因此没有上下文切换
+  - 每个EventLoop都有自己的任务队列，当任务提交时，提交线程若不是EventLoop对应的线程就进入队列等待，否则直接执行，inEventLoop(Thread)
+
+  ![image-20210617174210318](1IO模型.assets/image-20210617174210318-1623922931580.png)
+
+  - 异步传输的模式下，Channel和EventLoop的关系是多对一，EventLoopGroup为使用顺序循环（round-robin）的方式为Channel分配EventLoop以获取一个均衡的分布，一旦一个Channel被分配给一个EventLoop，它将在整个生命周期中都是用这个EventLoop（以及相关联的Thread）
+
+  ![image-20210617174255184](1IO模型.assets/image-20210617174255184-1623922976434.png)
+
+  - 阻塞传输的模式下，Channel和EventLoop的关系一对一，每来一个新的Channel，EventLoopGroup就创建一个新的EventLoop
+
+  ![image-20210617174322865](1IO模型.assets/image-20210617174322865-1623923010843.png)
+
+  - ServerBootstrap需要两组EventLoopGroup（可以是同一个实例），一组用于监听socket套接字，一组用于处理ChannelHandler
 
 ### 4.2 Netty的“零拷贝”主要体现在如下三个方面
 
