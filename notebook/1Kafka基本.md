@@ -192,7 +192,8 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 1. 创建KafkaProducer之后，后台会启动Sender线程，该线程运行时首先会创建与Broker的连接。
-2. 
+2. KafkaProducer 向某一台Broker再次请求集群的metadata，包括自己订阅Topic的所有meatadata
+3. KafkaProducer向Topic 分区的leader的broker发起TCP连接，准备写数据。
 
 
 
