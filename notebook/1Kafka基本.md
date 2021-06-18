@@ -189,7 +189,12 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 
 ### 13 Java生产者是如何管理TCP连接的？
 
-创建KafkaProducer之后，后台会启动Sender线程，该线程运行时首先会创建与Broker的连接。
+Producer从创建到真正写数据，会发起下面几次TCP连接请求？
+
+1. 创建KafkaProducer之后，后台会启动Sender线程，该线程运行时首先会创建与Broker的连接。
+2. 
+
+
 
 > KafkaProducer是线程安全的么？答案是KafkaProducer和Sender线程共享的可变数据结构只有RecordAccumulator类，因此如果RecordAccumulater类是线程安全的，那么它就是线程安全的。RecordAccumulator里面是使用ConcurrentMap<TopicPartiion,Deque>,TopicPartition是不可变类，Deque用到的地方，都加了锁。所以是线程安全的。
 >
@@ -267,6 +272,7 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 针对这些1、2、3分别有哪些实战经验呢？
 
 1. 规避第1类，Consumer未能及时发送心跳，导致Consumer被踢出Group而引发。 
+
    - `sesstion.timeout.ms = 6s`（尽快让不合格的Consumer，早日离开）
    - `heartbeat.interval.ms=2s`（保证Consumer在dead之前，至少发送了3次心跳请求。）
 
@@ -306,10 +312,10 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 
 如果这个Consumer的心跳发的不及时，说明它本身不合格，让它退出就退出了，不管；另外，如果是一批消息消费加上业务处理时间大于了`max.poll.interval.ms=5分钟`，**这就是很经典的场景。而且真实存在。解决方法有4个方向**
 
-	1. 减少下游处理单条消息的时间，优化业务系统，是最值得的事情
-	2. 加大`max.poll.interval.ms`，原则就是要计算一下总时间= 平均时间 * 一批总条数（默认500）
-	3. 降低一次poll的总条数：`max.poll.records`
-	4. 最高级的，下游多线程处理加速。比如Flink的KafkaConsumerThread就是这样。*TODO: 得看看源码*
+  1. 减少下游处理单条消息的时间，优化业务系统，是最值得的事情
+  2. 加大`max.poll.interval.ms`，原则就是要计算一下总时间= 平均时间 * 一批总条数（默认500）
+  3. 降低一次poll的总条数：`max.poll.records`
+  4. 最高级的，下游多线程处理加速。比如Flink的KafkaConsumerThread就是这样。*TODO: 得看看源码*
 
 > 思考：推荐先用第1个，其次用2、3个，最后一个比较难，不容易处理offset的提交。
 >
@@ -391,16 +397,22 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 - Rebalance监听器：处理Rebalance的offset。
 
   - 一旦发生Rebalance，Consumer是停止了的，但是数据已经给了业务线程池了。
+
 - 因此，Rebalance发生前，要给所有的业务线程，发送stop命令，停止处理；
+
   - 这个时候需要业务线程配合，要把最新的位移信息返回出来。
   - 然后Rebalance的监听器，提交这次位移。保证了数据的不丢不重复。
   - 最后，Rebalance开始，consumer 重新获得新的分区，开始从上一次提交的offset开始消费。完美的不丢不重复。
-  
+
   > 整个方案的好处是：约定一个work任务只能处理同一个分区的数据，这个分区的数据不处理完，就不poll这个分区的数据。保证了两边的解耦，可以加大业务线程池来提高效率。（比如topic有20个partition，最多可以启动20个业务线程对它进行处理。相比于第1种方案，它也要启动20个consumer线程，但是存在Rebalance的风险。）
+
 ### 21 Java消费者是如何管理TCP连接的
 
-1. 什么时候创建？
+1. 什么时候创建？调用KafkaConsumer.poll方法
 2. 讲一下创建的过程？3次请求
+   1. 寻找FindCoordinator和获取集群的metadata（Consumer发起）-- 最后被关闭
+   2. 连接Coordinator（Consumer发起）-- 一直被复用
+   3. 连接分区副本的leader（Consumer发起）---一直被复用
 3. 他们的生命周期是怎么样的？默认时间9分钟`connection.max.idle.ms`。
 
 ### 22 Consumer Group 的监控怎么做？Consumer Lag
@@ -439,12 +451,12 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 
 只有1个，管理所有的Broker。5大功能
 
-	1. 主题管理
-	2. 分区管理
-	3. Prefer 领导者选举
-	4. Broker管理
-	5. 元数据管理
-	6. Failure Over自动恢复
+  1. 主题管理
+  2. 分区管理
+  3. Prefer 领导者选举
+  4. Broker管理
+  5. 元数据管理
+  6. Failure Over自动恢复
 
 内部实现是怎么样的？单线程+队列的方式实现。（TODO: 看一下源码的解释）
 
@@ -455,11 +467,11 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 1. HW和 log endof offset 是什么？有什么作用？HW是以提交的位移最大值+1， Log End Offset是当前最新的消息位置。
    1. HW以下的消息是可见的，就是可以消费的
    2. HW和LEO帮助Kafka完成副本同步
-   
+
 2. Follower副本是如何同步的，或者Follower和Leader副本的HW和LEO是如何被更新的？
    1. 先要搞清楚，Leader和Follower副本的HW和LEO存储在哪里？他们被更新的时机是什么时候？LEO值最好理解。
    2. 然后简述其流程。
-   
+
 3. Leader Epoch引入解决的问题是什么？Leader 副本和Follower副本高水位的更新时间上会出现什么问题？
 
    1. 为什么？
