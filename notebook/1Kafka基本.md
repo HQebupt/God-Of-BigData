@@ -1,10 +1,10 @@
 # 1Kafka基本
 
-### 1  kafka是什么
+### 1  kafka
 
 消息引擎，从0.11开始，又是分布式流处理平台。
 
-### 2 如何规划kafka集群？
+### 2 规划集群
 
 - 需要存储，所以需要规划磁盘空间；如果一天有10亿条数据，每条1KB，需要保持14天？
 - 现在有个业务，1小时需要处理10TB的数据量，那么需要规划多少台Kakfa集群呢？
@@ -39,7 +39,7 @@
 
 > 补充问题：Kafka某个Topic的分区数量如何确定？需要考虑你的目标是什么？比如Producer的TPS是10万条/秒，记为T1, 然后在真实环境中，创建仅有1个分区的topic，往里面写，看看TPS=T2，这个就是每个分区能够写入的最大条数。然后分区数=T1/T2。（简单有效。）
 
-### 3 Kafka 重要的参数及如何设置
+### 3 参数
 
 | Broker参数                        | 含义 | 经验                          |
 | --------------------------------- | ---- | ----------------------------- |
@@ -105,11 +105,11 @@ bin/kafka-server-start.sh config/server.properties
 - Kafka 不需要为 Broker 设置太大的堆内存，而应该尽可能地把内存留给页缓存使用？
 - retention.ms 和 retention.bytes 这两个参数是不是只要满足一个，Kafka就会开始清消息了？
 
-### 3 为什么要分区，而不是使用多个主题？
+### 3 分区策略
 
 为了实现负载均衡，实现高伸缩性（Scalability），实现高吞吐量。
 
-#### 如何自定义分区策略有哪些？
+**如何自定义分区策略有哪些？**
 
 编写一个具体的类实现`org.apache.kafka.clients.producer.Partitioner`接口
 
@@ -132,12 +132,12 @@ int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] va
 
 - 在大规模集群中，还有一种基于地理位置的分区策略。
 
-### 4 怎么压缩，什么时候压缩，什么时候解压缩？
+### 4 解压缩
 
 V2版本的消息压缩是对消息集合message set进行压缩。压缩发生在Producer端和Broker端。什么时候Broker端会启动压缩？1 Producer端和Broker端指定了不同的压缩算法。2 是Broker端发送了消息格式转换，如果新版本的消息写入到老版本格式的kafka，就会发生。3 Broker在写数据的时候，会解压缩数据来进行校验，这个地方是耗性能的。（2.4版本已经解决了因为校验而引起的解压缩。存疑？PR-6699认为没有避免解压缩，只是少了create ByteBuffer）
 
 - **Producer 端压缩、Broker 端保持、Consumer 端解压缩。**
-- Consumer 怎么这些消息是用何种压缩算法压缩的呢？
+- Consumer 怎么知道消息是用何种压缩算法压缩的呢？
 
 有什么压缩算法？
 
@@ -156,7 +156,7 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 
 > TODO：学习一下Java飞行器的使用
 
-### 5 Kafka 到底在什么情况下才能保证消息不丢失呢？
+### 5 保证消息不丢失
 
 **Kafka对以提交的消息（committed message 做有限度的持久化保证。保证什么？保证消息不丢失。**
 
@@ -176,7 +176,7 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
    >
    >  思考题：Kafka有一个隐私的消息丢失场景：增加主题分区。当增加主题分区后，如果Producer先于Consumer感知到这个分区，而Consumer设置的是从latest的地方读取数据，那么就会存在数据丢失。有什么解决办法么？
 
-### 12 Kafka 拦截器
+### 12 拦截器
 
 如何监控一条消息从生产到最后消费的端到端延时也是很多 Kafka 用户迫切需要解决的问题。
 
@@ -187,15 +187,13 @@ V2版本的消息压缩是对消息集合message set进行压缩。压缩发生�
 
 > TODO 实践：如果Producer拦截器的onSend方法，return null, 那么这条消息会怎么样？
 
-### 13 Java生产者是如何管理TCP连接的？
+### 13 Producer TCP连接
 
 Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 1. 创建KafkaProducer之后，后台会启动Sender线程，该线程运行时首先会创建与Broker的连接。
 2. KafkaProducer 向某一台Broker再次请求集群的metadata，包括自己订阅Topic的所有meatadata
 3. KafkaProducer向Topic 分区的leader的broker发起TCP连接，准备写数据。
-
-
 
 > KafkaProducer是线程安全的么？答案是KafkaProducer和Sender线程共享的可变数据结构只有RecordAccumulator类，因此如果RecordAccumulater类是线程安全的，那么它就是线程安全的。RecordAccumulator里面是使用ConcurrentMap<TopicPartiion,Deque>,TopicPartition是不可变类，Deque用到的地方，都加了锁。所以是线程安全的。
 >
@@ -205,7 +203,16 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 目前来看，一个Producer会与所有的Broker创建TCP连接，然后kafka会关闭长时间不使用的TCP连接资源。因此，如果1000台机器，一个Producer可能只会与5台机器通信，但是它会先创建1000个连接，然后kafka在关闭995个。问题来了？如何优化？Kafka又是何时关闭连接的，默认空闲时间是多长？connections.max.idle.ms=9分钟。
 
-### 14 幂等生产者和事务生产者一样么？
+### 21 Consumer的TCP连接
+
+1. 什么时候创建？调用KafkaConsumer.poll方法
+2. 讲一下创建的过程？3次请求
+   1. 寻找FindCoordinator和获取集群的metadata（Consumer发起）-- 最后被关闭
+   2. 连接Coordinator（Consumer发起）-- 一直被复用
+   3. 连接分区副本的leader（Consumer发起）---一直被复用
+3. 他们的生命周期是怎么样的？默认时间9分钟`connection.max.idle.ms`。
+
+### 14 幂等Producer
 
 幂等性Producer是0.11引入的，如何生成？
 
@@ -218,15 +225,13 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 >
 > TODO: 这一章节，原理没有讲。
 
-### 15 ConsumerGroup如何设置Consumer实例
+### 15 ConsumerGroup
 
 - 保持和订阅的所有topic的总分区数相同。
-
 - 老版本的Consumer把位移保存在Zookeeper，好处是减少Broker的压力，实现更好地扩容和伸缩性
-
 - 新版本的Consumer把位移保存在Broker的内部topic `__consumer_offset`中。
 
-  
+
 
 1. **Rebalance的触发条件有几个？3**
 2. **Rebalance的策略是什么？从目的来想**
@@ -235,7 +240,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 > 最好的方式是减少Rebalance的方式，有实际的项目经验。
 
-### 16 位移主题的由来
+### 16 __consumer_offset由来
 
 你知道它为什么存在，它的作用是什么，怎么被默认创建，它有几种消息格式，什么时候写入进去，它的消息格式是怎样的， 它是怎么删除过期的数据的，Compaction（由log cleaner线程定期删除）
 
@@ -252,7 +257,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 > 与Zookeeper管理offset的方式相比较，有什么劣势？
 
-### 17 Rebalance 可以避免么？
+### 17 Rebalance (**重点**)
 
 - Rebalance的作用是什么？有什么坏处？3
 - Rebalance的触发条件有几个？3
@@ -287,7 +292,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 由于Rebalance的性能问题，无法应对大数据量的场景。因此Flink、Spark的Kafka Connector都是使用的Standalone Consumer，就没有Rebalance的问题。
 
-### 18 Kafka Consumer有什么样的方式提交offset
+### 18 提交offset
 
 - 自动提交：如何配置？Consumer会在后台启动一个线程来定期提交位移。逻辑上来讲，poll下一次数据的时候，会先提交上一批次的offset，所以不出异常的情况下，是能够正常运行，且没有重复和漏掉的消息。
 - 手动提交有3种，实际开发中，应该如何选择？能不能结合起来？能否避免消息消费重复？
@@ -298,9 +303,9 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 1. 开启自动提交位移，会出现消费重复。默认是5s自动提交一次位移。case: 提交完位移之后3s，这个时候发生了Rebalance。
 2. 手动提交位移，会不会消费重复？
 
-> 最佳实践：同时使用2者，利用commitSync的自动重试来避免由于网络瞬间抖动和Broker GC导致失败，兼顾用commitAsync来提升TPS。
+> 最佳实践：同时使用2者，利用commitSync的自动重试来避免由于网络瞬间抖动和Broker GC导致失败，兼顾用commitAsync来提升TPS。(TODO: 需要代码实现)
 
-### 19 CommitFailedException 异常怎么处理？（项目经验，写到简历）
+### 19 CommitFailedException（项目经验，写到简历）
 
 **要明白什么时候发生，才知道怎么处理？（手动用这个方法 `KafkaConsumer.commitSync() `）**
 
@@ -328,7 +333,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 通过监控，可以查询到是否有2个一模一样的ConsumerGroup，项目经验加成，实际中遇到过。
 
-### 20 如何实现多线程kafka consumer 
+### 20 多线程kafka consumer （重点）
 
 首先要知道Java kafka consumer 是单线程的，是线程不安全的。它实际上是2个线程：1个是消费主线程，一个是心跳线程。所以，一个consumer实例是不可以被多个线程共用的。
 
@@ -363,7 +368,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 - pause什么场景下用？pause是暂停一个分区拉取数据，而且不会触发Rebalance，常常`resume`搭配使用。
 - wakeup什么时候用，解决什么问题的？wakeup是唤醒一个Consumer线程的，特别地用于abort 长时间阻塞的`poll`操作，可以用来停止一个Consumer。
 - **Consumer在持续消费的时候，为什么poll总是能够准备地探测到下一次要拉取的信息？因为Consumer内部会维护一个指针，知道每次拉取了到了哪个位置，所以即使没commit offset，它也能够准备知道消费哪一条。但是重启Consumer或者Rebalance，这个指针就需要重置了。**
-- ~~offset的提交，kafka设计得比较简单，谁都可以提交，它都接受。~~ 这个是错误的，必须是分配到的Consumer才能提交该分区的offset，不然就会CommitException.
+- ~~offset的提交，kafka设计得比较简单，谁都可以提交，它都接受。~~ 这个是错误的，必须是分配到的Consumer才能提交该分区的offset，不然就会CommitFailedException.
 
 #### 针对方案2：手动提交offset+多线程消费者+多线程业务处理。
 
@@ -407,16 +412,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
   > 整个方案的好处是：约定一个work任务只能处理同一个分区的数据，这个分区的数据不处理完，就不poll这个分区的数据。保证了两边的解耦，可以加大业务线程池来提高效率。（比如topic有20个partition，最多可以启动20个业务线程对它进行处理。相比于第1种方案，它也要启动20个consumer线程，但是存在Rebalance的风险。）
 
-### 21 Java消费者是如何管理TCP连接的
-
-1. 什么时候创建？调用KafkaConsumer.poll方法
-2. 讲一下创建的过程？3次请求
-   1. 寻找FindCoordinator和获取集群的metadata（Consumer发起）-- 最后被关闭
-   2. 连接Coordinator（Consumer发起）-- 一直被复用
-   3. 连接分区副本的leader（Consumer发起）---一直被复用
-3. 他们的生命周期是怎么样的？默认时间9分钟`connection.max.idle.ms`。
-
-### 22 Consumer Group 的监控怎么做？Consumer Lag
+### 22 Consumer Group 监控？Consumer Lag
 
 1. Lag是什么意思？过大有什么坏处，和OS的页缓存有什么关系？
 2. 什么方法监控？3个
@@ -424,7 +420,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 3. 可否集成到监控框架？Zabbix 或 Grafana。KafkaManager
 
-### 23 Kafka 副本机制
+### 23 副本机制
 
 1. 什么是副本，它的作用是什么？3个
 2. ISR(In Sync Replica): 保持与Leader同步的副本。判断条件是什么？只有1个，看lag落后的时间，10s。更细致地讲，Broker启动的时候，会有2个线程做什么？
@@ -448,7 +444,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
   - 3 某个Consumer超时
 - 重平衡的时候，协调者Coordinator对组内成员提交位移的处理。
 
-### 26 Kafka控制器是做什么的？
+### 26 控制器Controller
 
 只有1个，管理所有的Broker。5大功能
 
@@ -463,7 +459,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 
 
-### 27 面试重点区：高水位HW和Leader Epoch
+### 27 高水位HW和Leader Epoch（面试重点）
 
 1. HW和 log endof offset 是什么？有什么作用？HW是以提交的位移最大值+1， Log End Offset是当前最新的消息位置。
    1. HW以下的消息是可见的，就是可以消费的
@@ -494,12 +490,12 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 
 
-### 28 主题管理回答2个问题
+### 28 主题管理
 
 1. 主题删除后，发现硬盘上还有？
 2. 内部主题__consumer_offsets 占用太多的磁盘？
 
-### 29 Kafka动态配置
+### 29 动态配置
 
 不用重启Broker的情况下，可以改变一些配置。常见的应用场景是动态调整Broker段网络线程池和IO线程池的大小，应对突发流量。
 
@@ -517,7 +513,8 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 ### 31 运维工具汇总
 
-可以忽略
+- 各种监控：Kafka Manager，Didi Kafka Manager
+- 跨集群备份：Mirror Maker, Confuent Uber等公司的工具。
 
 ### 32 AdminClent 是运维的好帮手
 
@@ -532,10 +529,6 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 ### 34 授权机制
 
 ACL：Access-Control List授权
-
-### 35 跨集群备份
-
-项目中暂时没用到，知道有Mirror Maker, Confuent Uber等公司的工具。
 
 ### 36 Kafka监控什么
 
