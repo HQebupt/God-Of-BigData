@@ -310,6 +310,55 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
 
 * 如果记录 counterCell 的 CAS 失败则调用 fullAddCount 继续自旋 CAS 直到成功
 
+#### 四种引用
+
+- 强引用:无论什么时候都不会自动回收（场景：正常使用）
+- 软引用:空间不足才会回收对象（场景：适合缓存）
+- 弱引用:不是立刻回收而是GC发现后会在下次GC时才会回收对象。（场景：如果对象偶尔使用可WeakReference.）
+- 虚引用:必须和引用队列(ReferenceQueue)联合使用,本次GC发现立即回收对象（场景：GC里面使用？）
+
+StrongReference、WeakReference、SoftReference、PhantomReference
+
+- WeakReference 引用的对象，当没有强引用指向它后，将在 GC 时被回收；如果其作为 Map.Entry 中的key，则整个 Entry 会被移除。
+
+```java
+    Obejct reference = new Object();
+    WeakReference<Obejct> weakRef = new WeakReference<>(reference);
+
+    reference = null;
+    System.gc(); // 被回收
+    AssertNull(weakRef.get())
+```
+
+- SoftReference 与 WeakReference 特性类似，区别在于 SoftReference 被回收的时机是在 JVM 内存不足之时；因此适合用于做缓存
+
+```java
+		String str = new String("abc");
+		SoftReference<String> softReference = new SoftReference<String>(str);
+		// 浏览器的回退可以用缓存设计：
+    if(softReference.get() != null) {
+        page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存
+    } else {
+        page = browser.getPage();// 内存不足，软引用的对象已经回收
+        softReference = new SoftReference(page);// 重新构建软引用
+    }
+```
+
+- PhantomReference，调用 get 永远返回 null，用于跟踪引用何时被 enqueue 至 ReferenceQueue 中.**虚引用必须和引用队列(ReferenceQueue)联合使用**。
+
+  > 对于GC来看，当垃圾回收器准备回收一个对象时，如果发现它还有虚引用，会在回收之前，把虚引用加入到与之关联的引用队列中。
+  >
+  > 对于用户来看，如果程序发现某个虚引用已经被加入到ReferenceQueue，那么回收之前采取一些行动。
+
+```java
+    String str = new String("abc");
+    ReferenceQueue queue = new ReferenceQueue();
+    // 创建虚引用，要求必须与一个引用队列关联
+    PhantomReference pr = new PhantomReference(str, queue);
+```
+
+
+
 ###  4分布式原理和zookeeper
 
 - CAP
