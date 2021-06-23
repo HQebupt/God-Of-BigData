@@ -423,8 +423,21 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 ### 23 副本机制
 
 1. 什么是副本，它的作用是什么？3个
+
 2. ISR(In Sync Replica): 保持与Leader同步的副本。判断条件是什么？只有1个，看lag落后的时间，10s。更细致地讲，Broker启动的时候，会有2个线程做什么？
-3. 如果Leader挂了，就会引发Leader Select，领导者选举。**TODO：需要详细的解释**
+
+3. 如果Leader挂了，就会引发Leader Select，领导者选举。调用配置的**分区选择算法**选择分区的leader
+
+   ![img](1Kafka基本.assets/v2-2ca43f116ec7b08b30d7d7eaa060bead_1440w-4431075.jpg)
+
+   > 关键在于是否开启，是否开启unclean选举。
+
+如何处理所有Replica都不工作？
+
+在ISR中至少有一个follower时，Kafka可以确保已经commit的数据不丢失，但如果某个Partition的所有Replica都宕机了，就无法保证数据不丢失了。这种情况下有两种可行的方案：
+
+1. 等待ISR中的任一个Replica“活”过来，并且选它作为Leader
+2. 选择第一个“活”过来的Replica（不一定是ISR中的）作为Leader
 
 ### 24 请求是如何被处理的
 

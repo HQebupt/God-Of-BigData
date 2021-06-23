@@ -16,7 +16,7 @@ OLS集群规模
 CPU详细信息：2个物理的，型号-Intel(R) Xeon(R) CPU E5-2430 v2 @ 2.50GHz
 
 |Num | Total内存|总占用| OLS|Spark Stream| Samza|Mem Reserved|
-|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 |60 | 2.58T|2.53T|2.1T|229.3G|30G|180G|
 
 - 统计的OLS所有运行的Container最大占用内存1.3T, 存在800G的优化空间。

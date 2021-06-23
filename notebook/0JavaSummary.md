@@ -639,7 +639,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
 <img src="0JavaSummary.assets/121186.png" alt="img" style="zoom:120%;" />
 
-## 5 框架知识Netty
+## 5 Netty
 
 1. Netty 是什么？Netty 的特点是什么？
 
@@ -668,3 +668,13 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 3. 了解哪几种序列化协议？如何选择序列化协议？
 4. Netty 支持哪些心跳类型设置？Netty 长连接、心跳机制了解么？
 5. Netty 和 Tomcat 的区别？
+
+## 6 kafka
+
+### kafka组件和基本概念
+
+- controller、leader、follower
+  - controller负责全局meta信息维护，管理Broker上下线、topic管理、管理分区副本分配、leader选举、管理所有副本状态机和分区状态机；通过zookeeper实现选举
+  - leader和follower是针对partition而言，当leader宕机，controller将从ISR中使用分区选择算法选出新的leader
+- 
+
