@@ -651,7 +651,7 @@ Netty在启动辅助类中可以灵活的配置TCP参数，满足不同的用户
 
    1. Netty的接收和发送`ByteBuffer`采用`DIRECT BUFFERS`，使用堆外直接内存进行`Socket`读写，不需要进行字节缓冲区的二次拷贝。如果使用传统的堆内存（HEAP BUFFERS）进行Socket读写，JVM会将内核内存Buffer拷贝一份到用户内存中，然后才写入Socket中，在发送数据的时候的时候，多了2次内存拷贝。**(减少用户态和内核态的对象拷贝)**
 
-   2. Netty提供了CompositeByteBuf对象，可以将多个ByteBuf 合并为一个逻辑上的 ByteBuf, 避免了各个 ByteBuf 之间的拷贝。，避免了传统通过内存拷贝的方式将几个小Buffer合并成一个大的Buffer。**（减少在用户态中，对象与对象的拷贝）**
+   2. Netty提供了CompositeByteBuf对象，可以将多个ByteBuf 合并为一个逻辑上的 ByteBuf, 避免了各个 ByteBuf 之间的拷贝。避免了传统通过内存拷贝的方式将几个小Buffer合并成一个大的Buffer。**（减少在用户态中，对象与对象的拷贝）**
 
    3. Netty的文件传输采用了FileChannel的transferTo方法，直接将文件缓冲区的数据发送到目标Channel，避免了传统通过循环write方式导致的内存拷贝问题。**(减少用户态和内核态的对象拷贝)**
 
@@ -661,6 +661,15 @@ Netty在启动辅助类中可以灵活的配置TCP参数，满足不同的用户
    - Netty是使用堆外内存，不经过内核内存的缓冲区。(堆外内存如何做垃圾回收？它的本质是软引用)
 
    当进行Socket IO读写的时候，为了避免从内核内存Buffer拷贝一份副本到用户内存，Netty的ByteBuf分配器直接创建非堆内存避免缓冲区的二次拷贝，通过“零拷贝”来提升读写性能。
+
+## 6 零拷贝
+
+实现的两种方式分别是：
+
+- **mmap+write**
+- **Sendfile**
+
+https://blog.csdn.net/zhengchao1991/article/details/104524468
 
 ## 6 总结
 
