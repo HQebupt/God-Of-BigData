@@ -8,7 +8,7 @@
 
 <img src="4Kafka源码.assets/image-20210610124553630-3300355.png" alt="image-20210610124553630" style="zoom: 33%;" />
 
-#### 1.1 保存消息文件的对象是怎么实现的？LogSegment
+### 1.1 保存消息文件的对象是怎么实现的？LogSegment
 
 - 为什么？为什么不单独用一个partition对应一个Log Segment？TODO: 为什么要切分日志。
 - 是什么？每个partition目录下，都有多个log segment，用来存储日志和索引。
@@ -180,9 +180,7 @@ recovery 使用场景：Broker在启动的时候，会把所有的Log Segment文
 - read的时候，minMessage参数的作用是什么？(至少可以读取一条message，防止消费饥饿)
 - recovery的时候，要读取LogSegment本地文件，然后构建索引。这会造成Kafka Broker启动很慢，因为要读很多本地磁盘文件的嘛。
 
-
-
-#### 1.2 Log是如何加载log segment的？
+### 1.2 Log是如何加载log segment的？
 
 ![image-20210614161716507](4Kafka源码.assets/image-20210614161716507-3658638.png)
 
@@ -194,7 +192,7 @@ Kafka定义的文件类型有哪些？.index .log .timeindex .txnindex , 还有.
 
 maybeIncrementHighWatermark 有什么作用？当leader收到follower所有提交的(HW,LEO)后，会判断是否更新高水位。
 
-#### 1.3 Log对象的常见操作
+### 1.3 Log对象的常见操作
 
 ![image-20210616083322626](4Kafka源码.assets/image-20210616083322626-3803604.png)
 
@@ -315,4 +313,29 @@ def read(startOffset: Long,
 ```
 
 - isolation:读取设置的级别，主要控制能够读取的最大位移值。是幂等的，还是事务的，还是普通的，多用于kafka事务。
+
+### 1.4 索引：改进版的二分查找
+
+- 问题：一个索引文件有多大，能存储多少条索引信息，能索引多少文件，具体的实现是什么？mmaps
+  - 10M，1M条信息，可以存储多少大小消息：4KB * 1M = 4K MB = 4GB消息。就是10M索引文件对应4GB index文件
+
+- 改进二分体现在哪里？ _warmEntries=8192
+  - for index: 只有8192/8 = 1024条索引，对应文件大小：1024*4KB = 4MB，热点数据4M
+  - for time index : 只有8192/12=2.7MB, 热点数据2.7MB
+
+继承关系：
+
+<img src="4Kafka源码.assets/image-20210627223904524-4804746.png" alt="image-20210627223904524" style="zoom: 33%;" />
+
+一个索引文件默认10MB，一个索引项8Byte，因此一个文件可能包含1M条索引项。
+
+Kafka的索引是**稀疏索引**，这样可以避免索引文件占用过多的内存，从而可以**在内存中保存更多的索引**。对应的就是Broker 端参数`log.index.interval.bytes` 值，默认4KB，即4KB的消息建一条索引。
+
+掌握以下几点：
+
+- offset index：4Byte保存相对位移，4Byte保存物理位置
+- timestamp index: 8 Byte 保存时间戳，4Byte保存物理位置
+- 索引的底层原理是什么？mmap，内存映射文件，实现是Java的MappedByteBuffer
+
+> Kafka索引设计解析: https://blog.csdn.net/yessimida/article/details/107094634 打通了mysql，很重要。
 
