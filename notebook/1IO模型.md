@@ -407,19 +407,37 @@ Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同
 
   - ServerBootstrap需要两组EventLoopGroup（可以是同一个实例），一组用于监听socket套接字，一组用于处理ChannelHandler
 
-### 4.2 Netty的“零拷贝”主要体现在如下三个方面
+### 4.2 Netty的“零拷贝”
 
-1. Netty的接收和发送`ByteBuffer`采用`DIRECT BUFFERS`，使用堆外直接内存进行`Socket`读写，不需要进行字节缓冲区的二次拷贝。如果使用传统的堆内存（HEAP BUFFERS）进行Socket读写，JVM会将内核内存Buffer拷贝一份到用户内存中，然后才写入Socket中，在发送数据的时候的时候，多了2次内存拷贝。**(减少用户态和内核态的对象拷贝)**
+1. mmap+write，使用堆外直接内存进行`Socket`读写，因此Netty的接收和发送`ByteBuffer`采用`DIRECT BUFFERS` 。**(减少用户态和内核态的对象拷贝)**
+2. 组合和拆分Buffer:  `CompositeChannelBuffer `实现零拷贝**（减少在用户态中，对象与对象的拷贝）**详细看下面的图解：
+3. 文件传输采用了FileChannel的transferTo方法 **(减少用户态和内核态的对象拷贝)**
 
-2. Netty提供了组合Buffer对象，可以聚合多个ByteBuffer对象，用户可以像操作一个Buffer那样方便的对组合Buffer进行操作，避免了传统通过内存拷贝的方式将几个小Buffer合并成一个大的Buffer。**（减少在用户态中，对象与对象的拷贝）**
+对第2点详细说明：Netty 在传输数据时，最终处理的数据会需要对单个传输的报文，进行组合和拆分，Netty 通过提供的 Composite（组合）和 Slice（拆分）两种 Buffer 来实现零拷贝。看下面一张图会比较清晰：
+![img](1IO模型.assets/20200226205251960-1624866709357.png)
 
-3. Netty的文件传输采用了FileChannel的transferTo方法，它可以直接将文件缓冲区的数据发送到目标Channel，避免了传统通过循环write方式导致的内存拷贝问题。**(减少用户态和内核态的对象拷贝)**
+- NIO 原生的 ByteBuffer 无法做到，必须通过内存拷贝的方式将几个小Buffer合并成一个大的Buffer。
 
-> 从这个角度来看，与Kafka的零拷贝，原理类似，都节约了2次 用户内存-内核内存的拷贝。
-- Kafka是使用文件Channel的transferTo方法，zeroCopy，不经过内核内存的缓冲区。
-- Netty是使用堆外内存，不经过内核内存的缓冲区。(堆外内存如何做垃圾回收？它的本质是软应用)
+TCP 层 HTTP 报文被分成了两个 ChannelBuffer，这两个 Buffer 对我们上层的逻辑（HTTP 处理）是没有意义的。但是两个 ChannelBuffer 被组合起来，就成为了一个有意义的 HTTP 报文，这个报文对应的 ChannelBuffer，才是能称之为“Message”的东西，这里用到了一个词“Virtual Buffer”。可以看一下 Netty 提供的 CompositeChannelBuffer 源码：
 
-当进行Socket IO读写的时候，为了避免从内核内存Buffer拷贝一份副本到用户内存，Netty的ByteBuf分配器直接创建非堆内存避免缓冲区的二次拷贝，通过“零拷贝”来提升读写性能。
+```java
+ class CompositeChannelBuffer extends AbstractChannelBuffer {
+ 
+    private final ByteOrder order;
+    private ChannelBuffer[] components; // 用来保存的就是所有接收到的 Buffer
+    private int[] indices; // Indices 记录每个 buffer 的起始位置
+    private int lastAccessedComponentId; // 记录上一次访问的 ComponentId
+    private final boolean gathering;
+ 
+    public byte getByte(int index) {
+        int componentId = componentId(index);
+        return components[componentId].getByte(index - indices[componentId]);
+}
+```
+
+
+
+- **CompositeChannelBuffer 并不会开辟新的内存并直接复制所有 ChannelBuffer 内容，而是直接保存了所有 ChannelBuffer 的引用，并在子 ChannelBuffer 里进行读写，实现了零拷贝。**
 
 ### 4.3 内存池
 随着JVM虚拟机和JIT即时编译技术的发展，对象的分配和回收是个非常轻量级的工作。但是对于缓冲区Buffer，情况却稍有不同，特别是对于堆外直接内存的分配和回收，是一件耗时的操作。
@@ -668,6 +686,122 @@ Netty在启动辅助类中可以灵活的配置TCP参数，满足不同的用户
 
 - **mmap+write**
 - **Sendfile**
+
+Java进程发起Read/Write请求加载数据的大致流程：底层调用Linux `read() write()`实现
+
+<img src="1IO模型.assets/3b0c6e94c9cc493c8d1cad2e07b9ddb0tplv-k3u1fbpfcp-zoom-1.image" alt="优享资讯| 什么是mmap？ 经典题目" style="zoom:67%;" />
+
+这个过程有什么问题? 一次简单的IO过程产生了4次上下文切换，在高并发场景下会对性能产生较大的影响。
+
+- 用户进程通过`read()`方法向操作系统发起调用，此时上下文从用户态转向内核态
+- DMA控制器把数据从硬盘中拷贝到读缓冲区
+- CPU把读缓冲区数据拷贝到应用缓冲区，上下文从内核态转为用户态，`read()`返回
+- 用户进程通过`write()`方法发起调用，上下文从用户态转为内核态
+- CPU将应用缓冲区中数据拷贝到socket缓冲区
+- DMA控制器把数据从socket缓冲区拷贝到网卡，上下文从内核态切换回用户态，`write()`返回
+
+> DMA（Direct Memory Access）直接内存访问技术，本质上来说他就是一块主板上独立的芯片，通过它来进行内存和IO设备的数据传输，从而减少CPU的等待时间。
+
+#### 是什么
+
+是指计算机执行操作时，CPU不需要先将数据从某处内存复制到另一个特定区域，这种技术通常用于通过网络传输文件时节省CPU周期和内存带宽。
+
+**利用虚拟内存，让内核空间和用户空间的虚拟地址，映射到同一个物理内存。这样DMA填充这块缓冲区的时候，两个空间都可见。**
+
+![clip_image004](1IO模型.assets/1550970-20201212172033717-1748604803-1624862837723.png)
+
+#### mmap + write：替换read,  减少read的一次copy
+
+使用`mmap`替换了read+write中的read操作，减少了一次CPU的拷贝。
+
+- mmap 是一种内存映射文件的方法，它将一个文件对象映射到进程的地址空间，实现文件磁盘地址和进程虚拟地址空间中一段虚拟地址的一一对应关系。
+
+- 换一种说法，实现方式是将读缓冲区的地址和用户缓冲区的地址进行映射，内核缓冲区和应用缓冲区共享。
+
+<img src="1IO模型.assets/b306256e43ba468abd5137775769cac1tplv-k3u1fbpfcp-zoom-1.image" alt="img" style="zoom:80%;" />
+
+
+
+整个过程发生了**4次用户态和内核态的上下文切换**和**3次拷贝**，具体流程如下：
+
+1. 用户进程通过`mmap()`方法向操作系统发起调用，上下文从用户态转向内核态
+2. DMA控制器把数据从硬盘中拷贝到读缓冲区
+3. **上下文从内核态转为用户态，mmap调用返回**
+4. 用户进程通过`write()`方法发起调用，上下文从用户态转为内核态
+5. **CPU将读缓冲区中数据拷贝到socket缓冲区**
+6. DMA控制器把数据从socket缓冲区拷贝到网卡，上下文从内核态切换回用户态，`write()`返回
+
+>  适用场景：`mmap`的方式下，用户进程中的内存是虚拟的，只是映射到内核的读缓冲区，所以可以节省一半的内存空间，比较适合大文件的传输。
+
+
+
+#### sendfile：替代了`read+write`，减少一次CPU拷贝，和2次上下文切换
+
+它是linux2.1引入的系统调用函数，目的是简化网络在两个通道之间的数据传输过程。`sendfile`替代了`read+write`，减少了数据复制，节省了一次系统调用，也就是2次上下文切换。
+
+<img src="1IO模型.assets/d6d68cc34030404a85d30d39c60ab3e4tplv-k3u1fbpfcp-zoom-1.image" alt="img" style="zoom:80%;" />
+
+
+
+整个过程发生了**2次用户态和内核态的上下文切换**和**3次拷贝**，具体流程如下：
+
+1. 用户进程通过`sendfile()`方法向操作系统发起调用，上下文从用户态转向内核态
+2. DMA控制器把数据从硬盘中拷贝到读缓冲区
+3. CPU将读缓冲区中数据拷贝到socket缓冲区
+4. DMA控制器把数据从socket缓冲区拷贝到网卡，上下文从内核态切换回用户态，`sendfile`调用返回
+
+>  `sendfile`方法IO数据对用户空间完全不可见，所以只能适用于完全不需要用户空间处理的情况，比如静态文件服务器。
+
+>  更高级： 数据传送只发生在内核空间，所以减少了一次上下文切换；但是还是存在一次 Copy，能不能把这一次 Copy 也省略掉？
+>
+> Linux2.4内核优化，将 Kernel buffer 中对应的数据描述信息（内存地址，偏移量）记录到相应的 Socket 缓冲区当中，节约CPU copy。（这种叫做DMA gather）
+
+它将读缓冲区中的数据描述信息--内存地址和偏移量记录到socket缓冲区，由 DMA 根据这些将数据从读缓冲区拷贝到网卡，相比之前版本减少了一次CPU拷贝的过程
+
+<img src="1IO模型.assets/a97c4913546e4ee38f9a44cbec0b7a97tplv-k3u1fbpfcp-zoom-1.image" alt="img" style="zoom:67%;" />
+
+整个过程发生了**2次用户态和内核态的上下文切换**和**2次拷贝**，其中更重要的是完全没有CPU拷贝，具体流程如下：
+
+1. 用户进程通过`sendfile()`方法向操作系统发起调用，上下文从用户态转向内核态
+2. DMA控制器利用scatter把数据从硬盘中拷贝到读缓冲区离散存储
+3. CPU把读缓冲区中的文件描述符和数据长度发送到socket缓冲区
+4. DMA控制器根据文件描述符和数据长度，使用scatter/gather把数据从内核缓冲区拷贝到网卡
+5. `sendfile()`调用返回，上下文从内核态切换回用户态
+
+#### 中间件的应用
+
+- RocketMQ：生产者和消费者都是`mmap+write`
+- Kafka: 生产者是`mmap+write`, 消费者或者Follow同步消息是`sendfile`
+- Netty：
+
+
+
+#### Java 零拷贝的实现
+
+- MappedByteBuffer 实现mmap，底层是生成了**DirectByteBuffer**，堆外内存。
+- FileChannel的transferTo实现 **Channel-to-Channel **，实现了sendFile
+
+```java
+
+// FileChannel transferTo：开始传输的位置，传输的字节数，以及目标通道
+public abstract long transferTo(long position, long count, WritableByteChannel target) throws IOException;
+// 用法：channel.transferTo(0, channel.size(), target);
+
+```
+
+
+
+#### 总结
+
+- 由于CPU和IO速度的差异问题，产生了DMA技术，通过DMA搬运来减少CPU的等待时间。
+
+- 传统的IO`read+write`方式会产生2次DMA拷贝+2次CPU拷贝，同时有4次上下文切换。
+
+- 而通过`mmap+write`方式则产生2次DMA拷贝+1次CPU拷贝，4次上下文切换，通过内存映射减少了一次CPU拷贝，可以减少内存使用，适合大文件的传输。
+
+- `sendfile`方式是新增的一个系统调用函数，产生2次DMA拷贝+1次CPU拷贝，但是只有2次上下文切换。因为只有一次调用，减少了上下文的切换，但是用户空间对IO数据不可见，适用于静态文件服务器。
+
+- `sendfile+DMA gather`方式产生2次DMA拷贝，没有CPU拷贝，而且也只有2次上下文切换。虽然极大地提升了性能，但是需要依赖新的硬件设备支持。
 
 https://blog.csdn.net/zhengchao1991/article/details/104524468
 
