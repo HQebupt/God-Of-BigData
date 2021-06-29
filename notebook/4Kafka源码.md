@@ -335,7 +335,56 @@ Kafka的索引是**稀疏索引**，这样可以避免索引文件占用过多�
 
 - offset index：4Byte保存相对位移，4Byte保存物理位置
 - timestamp index: 8 Byte 保存时间戳，4Byte保存物理位置
-- 索引的底层原理是什么？mmap，内存映射文件，实现是Java的MappedByteBuffer
+- 索引的底层原理是什么？mmap，内存映射文件，Java实现是MappedByteBuffer。
 
-> Kafka索引设计解析: https://blog.csdn.net/yessimida/article/details/107094634 打通了mysql，很重要。
 
+
+- 索引项是如何写入的？
+
+<img src="4Kafka源码.assets/image-20210629213215512-4973537.png" alt="image-20210629213215512" style="zoom: 33%;" />
+
+- 索引项是如何查找的？改进版的二分搜索：根据targetOffset，查找对应的slot，然后parseEntry，得到这个targetOffset所在的位置。
+
+  - 标准的二分有性能问题：没有考虑到缓存失效的问题，会导致不必要的page fault。Kafka的查询会阻塞，等到磁盘数据读入到页缓存中。
+
+  - 改进的二分，引入_warmEntries(8192)，让**查询热数据部分时，遍历的Page永远是固定的**，这样能避免缺页中断。
+
+    > 联想：**一致性hash相对于普通的hash不就是在node新增的时候缓存的访问固定，或者只需要迁移少部分数据**。
+
+- **为什么_warmEntries要设置成8192bytes？**
+
+  - 足够小，能够保证热区的数据真正在页缓存。
+
+    ```java
+    二分搜索需要查询3个 Entry，indexEntry(end), indexEntry(end-N),and indexEntry((end*2 -N)/2)，这3个Entry最多存储在3个页中，能够保证3个页都在页缓存中
+    ```
+
+  - 足够大，能够保证in-sync的请求都在热区。8192bytes可以容纳4M的offset数据，2.7M的timeOffset数据。
+
+- 不同索引的区别？
+
+  ![image-20210629215515981](4Kafka源码.assets/image-20210629215515981-4974918.png)
+
+![image-20210629214936206](4Kafka源码.assets/image-20210629214936206-4974577.png)
+
+**总结**
+
+- 索引是在文件末尾追加的写入的，并且一般写入的数据立马就会被读取。所以数据的热点集中在尾部。并且操作系统基本上都是**用页为单位缓存和管理内存的，内存又是有限的**，因此会通过类LRU机制淘汰内存。
+
+- 扩展：MySQL的buffer pool管理 from[Kafka索引设计解析](https://blog.csdn.net/yessimida/article/details/107094634 )
+
+  - MySQL的将缓冲池分为了新生代和老年代。默认是37分，即老年代占3，新生代占7。即看作一个链表的尾部30%为老年代，前面的70%为新生代。**替换了标准的LRU淘汰机制**。
+
+  - <img src="4Kafka源码.assets/format,png.png" alt="image" style="zoom:67%;" />
+
+  - MySQL的缓冲池分区是为了解决预读失效和缓存污染问题。
+
+    1. 预读失效：因为会预读页，假设预读的页不会用到，那么就白白预读了，因此让预读的页插入的是老年代头部，淘汰也是从老年代尾部淘汰。不会影响新生代数据。
+
+    2. 缓存污染：在类似like全表扫描的时候，会读取很多冷数据。并且有些查询频率其实很少，因此让这些数据仅仅存在老年代，然后快速淘汰才是正确的选择，MySQL为了解决这种问题，仅仅分代是不够的，还设置了一个时间窗口，默认是1s，即在老年代被再次访问并且存在超过1s，才会晋升到新生代，这样就不会污染新生代的热数据。
+
+
+
+## 2 请求处理
+
+![image-20210629230716573](4Kafka源码.assets/image-20210629230716573-4979238.png)
