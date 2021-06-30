@@ -637,19 +637,31 @@ Netty在启动辅助类中可以灵活的配置TCP参数，满足不同的用户
 
 2. TCP 粘包/拆包的原因及解决方法？(OLS sina是怎么处理的，杰哥的RedisEncoder是怎么写的)
 
-   TCP 粘包/拆包 就是你基于 TCP 发送数据的时候，出现了多个字符串“粘”在了一起或者一个字符串被“拆”开的问题。
+   **本质上TCP是流式协议，消息无边界**
 
-   **1.使用 Netty 自带的解码器**
+   - 粘包原因：
+     - 发送方写入的数据 小于 Socket缓冲区
+     - 接受方接受数据不及时
+   - 半包原因
+     - 发送方写入的数据 大于 Socket缓冲区
+     - 发送的数据大于MTU，必须拆包
+
+   - 解决办法：
+     - 封装成帧，固定长度字段存内容的长度信息，每次先解析消息有多长，然后读取后续的内容。（Netty的实现：LengthFieldBasedFrameDecoder, LengthFieldPrepender）
+
+   **1.使用 Netty 自带的解码器**（一次编解码：解决粘包和半包问题，byteBuffer--> byteBuffer）
 
    - **LineBasedFrameDecoder** : 发送端发送数据包的时候，每个数据包之间以换行符作为分隔，LineBasedFrameDecoder 的工作原理是它依次遍历 ByteBuf 中的可读字节，判断是否有换行符，然后进行相应的截取。
    - **DelimiterBasedFrameDecoder** : 可以自定义分隔符解码器，**LineBasedFrameDecoder** 实际上是一种特殊的 DelimiterBasedFrameDecoder 解码器。
    - **FixedLengthFrameDecoder**: 固定长度解码器，它能够按照指定的长度对消息进行相应的拆包。
-   - **LengthFieldBasedFrameDecoder**：
+   - **LengthFieldBasedFrameDecoder**：最推荐++。
 
-   **2.自定义序列化编解码器**
+   **2.自定义序列化编解码器**(二次编解码：解析byteBuffer-> Java Object)
 
-   - RedisDecoder\RedisEncoder
-   - OLS
+   * MessageToMessageDecoder Netty 自带的
+
+   - RedisDecoder\RedisEncoder：
+   - OLS 使用的是LengthFieldBaseFrameDecoder
 
 3. 了解哪几种序列化协议？如何选择序列化协议？从什么角度选择序列化协议？（TODO)
 
