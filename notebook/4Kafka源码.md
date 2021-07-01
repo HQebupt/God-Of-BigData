@@ -1,5 +1,3 @@
-![image-20210608215400269](4Kafka源码.assets/image-20210608215400269-3160442.png)
-
 ![image-20210608215556847](4Kafka源码.assets/image-20210608215556847-3160558.png)
 
 ## 1 日志模块
@@ -388,3 +386,28 @@ Kafka的索引是**稀疏索引**，这样可以避免索引文件占用过多�
 ## 2 请求处理
 
 ![image-20210629230716573](4Kafka源码.assets/image-20210629230716573-4979238.png)
+
+
+
+![image-20210701092532687](4Kafka源码.assets/image-20210701092532687-5102734.png)
+
+![image-20210608215400269](4Kafka源码.assets/image-20210701092750874-5102873.png)
+
+
+
+### Processor源码
+
+- 重要的队列
+  - newConnections=20，它保存的是要创建的新连接信息，
+  - inflightResponses，临时 Response 队列。当 Processor 线程将 Response 返还给
+    Request 发送方之后，还要将 Response 放入这个临时队列。
+  - responseQueue：每个 Processor 线程都会维护自己的 Response 队列。为了好发送回哪一个request。
+
+```scala	
+private val newConnections = new ArrayBlockingQueue[SocketChannel](connectionQuta)
+private val inflightResponses = mutable.Map[String, RequestChannel.Response]()
+private val responseQueue = new LinkedBlockingDeque[RequestChannel.Response]()
+```
+
+
+

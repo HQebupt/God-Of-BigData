@@ -558,9 +558,12 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   - ZXID 低 32 位为自增计数，高 32 位代表了 Leader 周期 epoch 编号
   - 当选举出一个新的 Leader 时，就会从这个 leader 本地日志中去的最大事务提议的 ZXID，解析出对应的 epoch 值再自加 1，以此作为新的 ZXID 的高 32 位，低 32 位则从 0 开始
 
-#### Zookeeper简介
+#### Zookeeper
+
+* 分布式协调服务框架，主要依靠文件系统和监听通知机制。
 
 - 特性：顺序一致性（主要是写操作的严格顺序性，每个更新请求都会分配一个全局唯一的递增编号）、原子性、单一视图（Single System Image）、可靠性（只要集群中有超过一半的机器能工作整个集群就能对外提供服务）、实时性（ZK将全量数据存储在内存中，因此适合读操作为主的应用场景）
+
 - 三种角色：Leader、Follower、Observer，Leader 提供读写，Follower 和 Observer 只提供读服务，Observer 不参与 Leader 选举过程，也不参与写操作的“过半写成功”策略，因此 Observer 可以不影响写性能的情况下提升集群读性能
   - leader职责是接受所有客户端请求，协调内部各个服务器。 
   - follower职责是处理客户端非事务请求，参与Proposal的投票和leader选举。
@@ -588,7 +591,10 @@ StrongReference、WeakReference、SoftReference、PhantomReference
     - 服务端SessionTracker有一个单独的线程专门进行会话超时检查，以ExpirationInterval作为时间点来触发检查，每次检查就检查过期的桶中所有剩下的未被迁移的会话即可
   - 当客户端与服务端网络断开，客户端会自动反复重连直到连上集群中的一台机器，如果在会话超时时间内重新连上，则状态改为 *CONNECTED*（CONNECTION_LOSS），如果超过超时时间才连上，则为 *EXPIRED*（SESSION_EXPIRED）
 
-- ZAB Leader选举(面试重点：ZAB的领导者选举过程 TODO)
+- **ZAB Leader选举(面试重点：ZAB的领导者选举过程 TODO)**
+  
+- <img src="0JavaSummary.assets/image-20210630231038099.png" alt="image-20210630231038099" style="zoom:50%;" />
+  
   - 服务器状态
     - LOOKING：Leader 选举阶段
     - FOLLOWING：跟随者状态
@@ -627,7 +633,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
       - 如果已经确定过半服务器认可了自己的投票（可能是更新后的投票），则投票终止；否则继续接受其他服务器的投票
     - 更新服务器状态
       - 投票终止后，服务器开始更新自身状态. 若过半票投给了自己，则将自己的服务器状态更新为LEADING，否则将自己的状态更新为 FOLLOWING
-
+  
 - 数据同步
   - 几个定义
     - peerLastZXID：learner 服务器最后处理的 ZXID
