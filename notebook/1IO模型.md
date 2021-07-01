@@ -109,7 +109,7 @@ recvfrom 可以从java程序中理解调用了read()
 
 ### 1.1Channel & Buffer
 1. channel理解成建立连接的那根管道
-2. Buffer 理解成接入管道的那段水管
+2. Buffer 理解成接入管道那段水管
 3. 通道涵盖了UDP 和 TCP 网络IO，以及文件IO
 4. Buffer的实现基本涵盖了所有的类型
 5. Netty自己又实现了更轻量级的ByteBuf
@@ -439,12 +439,16 @@ TCP 层 HTTP 报文被分成了两个 ChannelBuffer，这两个 Buffer 对我们
 
 - **CompositeChannelBuffer 并不会开辟新的内存并直接复制所有 ChannelBuffer 内容，而是直接保存了所有 ChannelBuffer 的引用，并在子 ChannelBuffer 里进行读写，实现了零拷贝。**
 
-### 4.3 内存池
-随着JVM虚拟机和JIT即时编译技术的发展，对象的分配和回收是个非常轻量级的工作。但是对于缓冲区Buffer，情况却稍有不同，特别是对于堆外直接内存的分配和回收，是一件耗时的操作。
+### 4.3 内存池 
 
-为了尽量重用缓冲区，Netty提供了基于内存池的缓冲区重用机制。具体实现是Netty ByteBuf。
+原因：缓冲区Buffer是堆外内存，对于堆外直接内存的分配和回收，是一件耗时的操作。
 
-> 性能测试表明，采用内存池的ByteBuf相比于朝生夕灭的ByteBuf，性能高23倍左右（性能数据与使用场景强相关）。
+方案：为了尽量重用缓冲区，Netty提供了基于内存池的缓冲区重用机制。具体实现是PooledByteBufAllocator，最底层分配直接内存是Java的`ByteBuf.allocateDirect`
+
+使用堆外内存的条件：
+
+- 要有cleaner方法去释放
+- io.netty.noPreferDirect = false
 
 ### 4.4 无锁化的串行设计理念
 在大多数场景下，并行多线程处理可以提升系统的并发性能。但是，如果对于共享资源的并发访问处理不当，会带来严重的锁竞争，这最终会导致性能的下降。为了尽可能的避免锁竞争带来的性能损耗，可以通过串行化设计，即消息的处理尽可能在同一个线程内完成，期间不进行线程切换，这样就避免了多线程竞争和同步锁。
