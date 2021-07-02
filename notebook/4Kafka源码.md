@@ -363,7 +363,7 @@ Kafka的索引是**稀疏索引**，这样可以避免索引文件占用过多�
 
   ![image-20210629215515981](4Kafka源码.assets/image-20210629215515981-4974918.png)
 
-![image-20210629214936206](4Kafka源码.assets/image-20210629214936206-4974577.png)
+<img src="4Kafka源码.assets/image-20210629214936206-4974577.png" alt="image-20210629214936206" style="zoom: 80%;" />
 
 **总结**
 
@@ -389,43 +389,31 @@ Kafka的索引是**稀疏索引**，这样可以避免索引文件占用过多�
 
 - 是什么？传输Request和Response的Channel。
 
-- 用在哪里？IO线程和Processor线程池的通道。![image-20210702085943004](4Kafka源码.assets/image-20210702085943004-5187584.png)
+- 用在哪里？IO线程和Processor线程池的通道。<img src="4Kafka源码.assets/image-20210702085943004-5187584.png" alt="image-20210702085943004" style="zoom:50%;" />
 
 - 核心实现：
 
   ```
-  requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize) // 阻塞队列
+  requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize) // 阻塞队列，500 default
   processors = new ConcurrentHashMap[Int, Processor]() // 维护processor线程池
   Processor往Queue里面发请求（入队）
   IO thread往Queue里面poll请求（出队）
   ```
 
-![image-20210629230716573](4Kafka源码.assets/image-20210629230716573-4979238.png)
+<img src="4Kafka源码.assets/image-20210629230716573-4979238.png" alt="image-20210629230716573" style="zoom:50%;" />
 
 几个重要的监控指标：
 
 - RequestsPerSec：每秒处理的 Request 数，用来评估 Broker 的繁忙状态。
-- **RequestQueueTimeMs：计算 Request 在 Request 队列中的平均等候时间，单位是
-  毫秒。倘若 Request 在队列的等待时间过长，你通常需要增加后端 I/O 线程的数量，来
-  加快队列中 Request 的拿取速度。**（项目经验：sina发现3台broker的这个值过高，原因是它有一个热点topic，在CPU和负载还可以的情况下，提升了一倍IO线程数=8，加大处理能力；这个方案还可以应对突发流量，在流量开始激增的时候，通过监控拿到这个指标，临时加大IO线程数。最终的方法就是reassign 的分区的leader，重新平衡一下。这个问题，同样在EMC也遇到过，原因是topic申请分区太少，2个分区，但是数据量相对而言，特别大，导致晚上的时候发给这2个brokerr的请求，在队列的等待时间变长。）
-- LocalTimeMs：计算 Request 实际被处理的时间，单位是毫秒。一旦定位到这个监控
-  项的值很大，你就需要进一步研究 Request 被处理的逻辑了，具体分析到底是哪一步消
-  耗了过多的时间。
-- RemoteTimeMs：Kafka 的读写请求（PRODUCE 请求和 FETCH 请求）逻辑涉及等待
-  其他 Broker 操作的步骤。RemoteTimeMs 计算的，就是等待其他 Broker 完成指定逻
-  辑的时间。因为等待的是其他 Broker，因此被称为 Remote Time。这个监控项非常重
-  要！Kafka 生产环境中设置 acks=all 的 Producer 程序发送消息延时高的主要原因，往
-  往就是 Remote Time 高。因此，如果你也碰到了这样的问题，不妨先定位一下
-  Remote Time 是不是瓶颈。（**项目经验：某些topic的Producer的延迟在ack=all的情况下特别高，RemoteTimeMs达到了1s以上，副本broker ping延迟查过了500ms，网络交换机出现了问题，更换交换机**）
-- TotalTimeMs：计算 Request 被处理的完整流程时间。这是最实用的监控指标，没有
-  之一！毕竟，我们通常都是根据 TotalTimeMs 来判断系统是否出现问题的。一旦发现了
-  问题，我们才会利用前面的几个监控项进一步定位问题的原因。
+- **RequestQueueTimeMs：计算 Request 在 Request 队列中的平均等候时间，单位是毫秒。倘若 Request 在队列的等待时间过长，你通常需要增加后端 I/O 线程的数量，来加快队列中 Request 的拿取速度。**（项目经验：sina发现3台broker的这个值过高，原因是它有一个热点topic，在CPU和负载还可以的情况下，提升了一倍IO线程数=8，加大处理能力；这个方案还可以应对突发流量，在流量开始激增的时候，通过监控拿到这个指标，临时加大IO线程数。最终的方法就是reassign 的分区的leader，重新平衡一下。这个问题，同样在EMC也遇到过，原因是topic申请分区太少，2个分区，但是数据量相对而言，特别大，导致晚上的时候发给这2个brokerr的请求，在队列的等待时间变长。）
+- LocalTimeMs：计算 Request 实际被处理的时间，单位是毫秒。一旦定位到这个监控项的值很大，你就需要进一步研究 Request 被处理的逻辑了，具体分析到底是哪一步消耗了过多的时间。
+- RemoteTimeMs：Kafka 的读写请求（PRODUCE 请求和 FETCH 请求）逻辑涉及等待其他 Broker 操作的步骤。RemoteTimeMs 计算的，就是等待其他 Broker 完成指定逻辑的时间。因为等待的是其他 Broker，因此被称为 Remote Time。这个监控项非常重要！Kafka 生产环境中设置 acks=all 的 Producer 程序发送消息延时高的主要原因，往往就是 Remote Time 高。因此，如果你也碰到了这样的问题，不妨先定位一下Remote Time 是不是瓶颈。（**项目经验：某些topic的Producer的延迟在ack=all的情况下特别高，RemoteTimeMs达到了1s以上，副本broker ping延迟查过了500ms，网络交换机出现了问题，更换交换机**）
+- TotalTimeMs：计算 Request 被处理的完整流程时间。这是最实用的监控指标，没有之一！毕竟，我们通常都是根据 TotalTimeMs 来判断系统是否出现问题的。一旦发现了问题，我们才会利用前面的几个监控项进一步定位问题的原因。
 
 > 详细总结一下，Kafka的server的性能如何诊断？
 
-### SocketServer
-
-Request 类：是Acceptor接受外部请求，会转换成Request类，保存在RequestQueue中。
+#### Request 类
+- 是Acceptor接受外部请求，会转换成Request类，保存在RequestQueue中。
 
 ```scala
 class Request(val processor: Int, // 保存这个request是被哪个processor处理的
@@ -435,29 +423,109 @@ class Request(val processor: Int, // 保存这个request是被哪个processor处
               @volatile private var buffer: ByteBuffer,
 ```
 
-![image-20210701092532687](4Kafka源码.assets/image-20210701092532687-5102734.png)
+### SocketServer
+
+- 是Reactor中MainReactor 和 SubReactor的实现
+
+- 主要包括2个大块：
+
+  - Acceptor线程：接收外部请求，创建TCP连接，分发给Processor处理。
+    - 它使用Java NIO的Selector+SocketChannel方式轮询IO事件，主要是网络连接创建事件`SelectionKey.OP_ACCEPT`
+    - 来请求时，指定一个Processor线程，让它建立真正的TCP连接。
+  - Processor线程池：处理外部的IO请求，主要是将请求解析成Request类，放入RequestChannel的Request队列中，供业务线程使用。
+  - SocketServer类：协调管理所有的组件，比如Acceptor和Processor
+
+  
 
 
 
-![image-20210701222943722](4Kafka源码.assets/image-20210701222943722-5149786.png)
-
-![image-20210608215400269](4Kafka源码.assets/image-20210701092750874-5102873.png)
+<img src="4Kafka源码.assets/image-20210701092532687-5102734.png" alt="image-20210701092532687" style="zoom: 50%;" />
 
 
 
-### Processor源码
+
+
+#### **Processor**
 
 - 重要的队列
   - newConnections=20，它保存的是要创建的新连接信息，
-  - inflightResponses，临时 Response 队列。当 Processor 线程将 Response 返还给
-    Request 发送方之后，还要将 Response 放入这个临时队列。
+  - inflightResponses，临时 Response 队列。当 Processor 线程将 Response 返还给Request 发送方之后，还要将 Response 放入这个临时队列。为什么？方便Response被真正发送之后，执行回调逻辑。
   - responseQueue：每个 Processor 线程都会维护自己的 Response 队列。为了好发送回哪一个request。
 
 ```scala	
 private val newConnections = new ArrayBlockingQueue[SocketChannel](connectionQuta)
 private val inflightResponses = mutable.Map[String, RequestChannel.Response]()
 private val responseQueue = new LinkedBlockingDeque[RequestChannel.Response]()
+
+override def run(): Unit = {
+    startupComplete() // 
+    try {
+      while (isRunning) {
+        try {
+          // setup any new connections that have been queued up
+          configureNewConnections()
+          // register any new responses for writing
+          processNewResponses()
+          poll()
+          processCompletedReceives()
+          processCompletedSends()
+          processDisconnected()
+          closeExcessConnections()
+        } catch {
+          // We catch all the throwables here to prevent the processor thread from exiting. We do this because
+          // letting a processor exit might cause a bigger impact on the broker. This behavior might need to be
+          // reviewed if we see an exception that needs the entire broker to stop. Usually the exceptions thrown would
+          // be either associated with a specific socket channel or a bad request. These exceptions are caught and
+          // processed by the individual methods above which close the failing channel and continue processing other
+          // channels. So this catch block should only ever see ControlThrowables.
+          case e: Throwable => processException("Processor got uncaught exception.", e)
+        }
+      }
+    } finally {
+      debug(s"Closing selector - processor $id")
+      CoreUtils.swallow(closeAll(), this, Level.ERROR)
+      shutdownComplete()
+    }
+  }
 ```
 
+### 请求流程
 
 
+<img src="4Kafka源码.assets/image-20210701092750874-5102873.png" alt="image-20210608215400269" style="zoom:80%;" />
+
+- 1：Clients 或其他 Broker 发送请求给 Acceptor 线程
+
+  - Acceptor 线程通过调用 accept 方法，创建对应的 SocketChannel，然后将该 Channel 实例传给 assignNewConnection 方法，等待 Processor 线程将该 Socket 连接 请求，放入到它维护的待处理连接队列中。后续 Processor 线程的 run 方法会不断地从该 队列中取出这些 Socket 连接请求，然后创建对应的 Socket 连接。
+  - assignNewConnection 方法的主要作用是，将这个新建的 SocketChannel 对象存入 Processors 线程的 newConnections 队列中。之后，Processor 线程会不断轮询这个队列 中的待处理 Channel，并向这些 Channel 注册基于 Java NIO 的 Selector，用于真正的请求获取和响应发送 I/O 操作。
+
+- 第 2 & 3 步：Processor 线程处理请求，并放入请求队列
+
+  - 一旦 Processor 线程成功地向 SocketChannel 注册了 Selector，Clients 端或其他 Broker 端发送的请求就能通过该 SocketChannel 被获取到，具体的方法是 Processor 的 processCompleteReceives
+  - Processor 线程处理请求，就是指它从底层 I/O 获取到发送数据，将其转换成 Request 对象实例，并最终添加到请求队列RequestQueue的过程。
+
+- 4 步：I/O 线程处理请求
+
+  - KafkaRequestHandler 线程循环地从请求队列中获取 Request 实例，然后交由 KafkaApis 的 handle 方法，执行真正的请求处理逻辑。
+
+- 5 步：KafkaRequestHandler 线程将 Response 放入 Processor 线 程的 Response 队列
+
+  - 这一步的工作由 KafkaApis 类完成。当然，这依然是由 KafkaRequestHandler 线程来完 成的。KafkaApis.scala 中有个 sendResponse 方法，将 Request 的处理结果 Response 发送出去。本质上，它就是调用了 RequestChannel 的 sendResponse 方法
+
+- 6 步：Processor 线程发送 Response 给 Request 发送方
+
+  - 最后一步是，Processor 线程取出 Response 队列中的 Response，返还给 Request 发送 方。具体代码位于 Processor 线程的 processNewResponses 方法
+  - 最底层的部分是 sendResponse 方法来执行 Response 发送。该方法底 层使用 Selector 实现真正的发送逻辑。
+
+  
+
+![image-20210701222943722](4Kafka源码.assets/image-20210701222943722-5149786.png)
+
+#### KafkaRequestHandlerPool
+
+- 是Reactor中ThreadPool的实现，真正处理请求的地方。
+- 核心结构2个
+  - KafkaRequestHandler：请求处理线程类。每个请求处理线程实例，负责从 SocketServer 的 RequestChannel 的请求队列中获取请求对象，并进行处理。
+    - 依赖apis：KafkaApis类，用于真正实现请求处理逻辑的类
+  - KafkaRequestHandlerPool：请求处理线程池，负责创建、维护、管理和销毁下辖的 请求处理线程。
+- 细节上：Data plane 所属的 KafkaRequestHandlerPool 线程池的初始数量，就是 Broker 端的参数 nums.io.threads=8， Control plane 的线程池的数量，则硬编码为 1，队列长度20.
