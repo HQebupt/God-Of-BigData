@@ -443,12 +443,14 @@ TCP 层 HTTP 报文被分成了两个 ChannelBuffer，这两个 Buffer 对我们
 
 原因：缓冲区Buffer是堆外内存，对于堆外直接内存的分配和回收，是一件耗时的操作。
 
-方案：为了尽量重用缓冲区，Netty提供了基于内存池的缓冲区重用机制。具体实现是PooledByteBufAllocator，最底层分配直接内存是Java的`ByteBuf.allocateDirect`
+方案：为了尽量重用缓冲区，Netty提供了基于内存池的缓冲区重用机制。具体实现是PooledByteBufAllocator，最底层分配直接内存是Java的`ByteBuffer.allocateDirect`
 
 使用堆外内存的条件：
 
 - 要有cleaner方法去释放
 - io.netty.noPreferDirect = false
+
+> Kafka的RequestChannel的MemoryPool作用是什么，怎么分配内存？和Netty有区别吗？
 
 ### 4.4 无锁化的串行设计理念
 在大多数场景下，并行多线程处理可以提升系统的并发性能。但是，如果对于共享资源的并发访问处理不当，会带来严重的锁竞争，这最终会导致性能的下降。为了尽可能的避免锁竞争带来的性能损耗，可以通过串行化设计，即消息的处理尽可能在同一个线程内完成，期间不进行线程切换，这样就避免了多线程竞争和同步锁。
