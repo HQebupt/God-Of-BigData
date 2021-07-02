@@ -89,17 +89,18 @@ recvfrom 可以从java程序中理解调用了read()
 
 
 ---
-## 1.NIO核心
+## 1.NIO核心：Selector
 最核心的概念：Channel、Buffer、Selector。
+
+- Selector 选择器, 多路复用器（允许单个Selector处理多个 Channel）。作用是：检查多个 Channel（通道）的状态是否处于可读、可写事件。
 
 - Buffer 缓冲区，本质上就是一块内存区。（这块内存被NIO Buffer包裹起来，对外提供一系列的读写方便开发的接口。）
 
-- Channel 通道，是读写Buffer的入口。
+- Channel 通道，是读写Buffer的入口。Channel 需要向`Selector`注册监听的事件
   - 从通道进行数据读取 ：创建一个缓冲区，然后请求通道读取数据。
   - 从通道进行数据写入 ：创建一个缓冲区，填充数据，并要求通道写入数据。
 
-- Selector 选择器, 多路复用器。检查多个 Channel（通道）的状态是否处于可读、可写事件。
-- 工作原理：Selector负责监听外部事件，Channel把自己注册到Selector，并告诉自己感兴趣的事件。但外部有事件来的时候，就会去轮询Channel，找到合适的Channel来处理。
+- **工作原理：Selector负责监听外部事件，Channel把自己注册到Selector，并告诉自己感兴趣的事件。但外部有事件来的时候，就会去轮询Channel，找到合适的Channel来处理。而Buffer是存放数据的地方**
 
 数据读取和写入操作图示：
 
@@ -107,29 +108,39 @@ recvfrom 可以从java程序中理解调用了read()
 
 <img src="1IO模型.assets/image-20210610213655280-3332217.png" alt="image-20210610213655280" style="zoom:67%;" />
 
-### 1.1Channel & Buffer
-1. channel理解成建立连接的那根管道
-2. Buffer 理解成接入管道那段水管
-3. 通道涵盖了UDP 和 TCP 网络IO，以及文件IO
-4. Buffer的实现基本涵盖了所有的类型
-5. Netty自己又实现了更轻量级的ByteBuf
-6. FileChannel的transferTo和transferFrom使用的zero_copy，其他的目前不支持
 
 
-### 1.2Selector
-- Channel 需要向`Selector`注册监听的事件
-- 调用` select `方法，这是个阻塞方法
-
-1. java6之前是基于`poll`实现的,java6之后是基于`epoll`实现的。
-2. Netty是基于边界的并发机制，调用lib native库，堆外内存的需要自己管理，(Spark 1.6 NIO、Netty4的可选)，Java是基于垂直的并发的并发机制。
-1. Selector允许单线程处理多个 Channel
+1. java6之前是Selector基于`poll`实现的,java6之后是基于`epoll`实现的。
 1. Oracle jdk会自动选择合适的Selector。 如果想设置特定的Selector，可以属性：`-Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.EPollSelectorProvider`
 1. 参考： [讲 selector 的用法](http://ifeve.com/selectors/)
 
 > FileChannel 不支持 非阻塞; 网络IO支持非阻塞。
 
+### 最佳实践
+
+```java
+
+//第一步 创建Selector：通过调用Selector.open()方法创建一个Selector
+Selector selector = Selector.open();
+//第二步 必须将channel注册到selector上，并且指定感兴趣的事件是 Accept
+ssc.register(selector, SelectionKey.OP_ACCEPT);
+
+while (true)
+	//第三步 通过Selector选择通道，一旦向Selector注册了多个通道，select()方法返回你所感兴趣的事件（如连接、接受、读或写）已经准备就绪的那些通道。
+	int nReady = selector.select(); // 一旦调用了select()方法，并且返回值表明有一个或更多个通道就绪了，然后可以通过调用selector的selectedKeys()方法
+	Set<SelectionKey> keys = selector.selectedKeys();
+
+	if (key.isReadable()) 
+		// 第四步 SelectionKey.channel()方法返回的通道需要转型成你要处理的类型，如SocketChannel等。
+		SocketChannel socketChannel = (SocketChannel) key.channel();
+		socketChannel.read(readBuff);
+		System.out.println("received : " + new String(readBuff.array()));
+```
+
+
 
 ## 3.Reactor网络模型
+
 ### 3.0 基本模型
 每一个handler都是在自己的线程中启动和运行，如常用的线程池的方式来处理请求。
 <img src="1IO模型.assets/780676-20190727140921602-1770136470-3332901.png" alt="img" style="zoom:67%;" />

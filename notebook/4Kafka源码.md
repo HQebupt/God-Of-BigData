@@ -448,9 +448,12 @@ class Request(val processor: Int, // 保存这个request是被哪个processor处
 #### **Processor**
 
 - 重要的队列
-  - newConnections=20，它保存的是要创建的新连接信息，
-  - inflightResponses，临时 Response 队列。当 Processor 线程将 Response 返还给Request 发送方之后，还要将 Response 放入这个临时队列。为什么？方便Response被真正发送之后，执行回调逻辑。
-  - responseQueue：每个 Processor 线程都会维护自己的 Response 队列。为了好发送回哪一个request。
+  - **newConnections=20 ArrayBlockingQueue**，它保存的是要创建的新连接信息，
+  - **inflightResponses Map**，临时 Response 队列。当 Processor 线程将 Response 返还给Request 发送方之后，还要将 Response 放入这个临时队列。为什么？方便Response被真正发送之后，执行回调逻辑。
+  - **responseQueue LinkedBlockingDeque**：每个 Processor 线程都会维护自己的 Response 队列。为了好发送回哪一个request。
+- Processor的核心处理逻辑
+  - 当Acceptor线程接收到请求之后，会选择一个Processor来处理这个连接，把SocketChannel放入到Processor的newConnections队列中。
+  - 所以run方法的第一步，就是从这个队列中，取出所有请求，建立真正的连接。也就是取出Channel，把它注册到自己的Selector上。
 
 ```scala	
 private val newConnections = new ArrayBlockingQueue[SocketChannel](connectionQuta)
@@ -458,30 +461,24 @@ private val inflightResponses = mutable.Map[String, RequestChannel.Response]()
 private val responseQueue = new LinkedBlockingDeque[RequestChannel.Response]()
 
 override def run(): Unit = {
-    startupComplete() // 
+    startupComplete() // 等待Processor线程启动
     try {
       while (isRunning) {
         try {
           // setup any new connections that have been queued up
-          configureNewConnections()
+          configureNewConnections() // 注册到Selector，建立真正的连接
           // register any new responses for writing
-          processNewResponses()
-          poll()
-          processCompletedReceives()
-          processCompletedSends()
-          processDisconnected()
-          closeExcessConnections()
+          processNewResponses() // 发送Response,并把Response放入到inflightResponses队列
+          poll() // 执行NIO poll，获取SocketChannel上准备就绪的IO事件
+          processCompletedReceives() // 将接收到的Request放入Request队列
+          processCompletedSends()// 为临时Response队列中的Response执行回调逻辑
+          processDisconnected()// 处理因发送失败而导致的连接断开
+          closeExcessConnections() // 关闭超过配额限制部分的连接
         } catch {
-          // We catch all the throwables here to prevent the processor thread from exiting. We do this because
-          // letting a processor exit might cause a bigger impact on the broker. This behavior might need to be
-          // reviewed if we see an exception that needs the entire broker to stop. Usually the exceptions thrown would
-          // be either associated with a specific socket channel or a bad request. These exceptions are caught and
-          // processed by the individual methods above which close the failing channel and continue processing other
-          // channels. So this catch block should only ever see ControlThrowables.
           case e: Throwable => processException("Processor got uncaught exception.", e)
         }
       }
-    } finally {
+    } finally { // 关闭资源
       debug(s"Closing selector - processor $id")
       CoreUtils.swallow(closeAll(), this, Level.ERROR)
       shutdownComplete()
@@ -489,7 +486,22 @@ override def run(): Unit = {
   }
 ```
 
+> 因为Selector 不熟悉，再多写一点：`poll() `执行后，Selector上就会有准备就绪的IO事件了，所以，接下来，就可以调用`          processCompletedReceives()`，把这些事件封装成Request，入队到RequestChannel的RequestQueue中，供KafkaRequestHandler IO线程来处理这些请求。
+
 ### 请求流程
+
+这个图更加源码话表述。
+
+![image-20210702154239238](4Kafka源码.assets/image-20210702154239238-5211760.png)
+
+- Client发送请求给SocketServer
+- Acceptor收到请求，轮询的方式分配给Processor，创建TCP连接，放入到newConncetions队列
+- Processor处理请求，把请求放入到RequestQueue
+- KafkaRequestHandlerPool从请求队列中获取 Request 实例，然后交由 KafkaApis 的 handle 方法，执行真正的请求处理逻辑。
+- KafkaRequestHandler 线程调用RequestChannel的SendResponse方法，将 Response 放入 Processor 线程的 Response Queue中
+- 最后，Processor 线程发送 Response 给 Request 发送方
+
+这张图更加易懂化。
 
 
 <img src="4Kafka源码.assets/image-20210701092750874-5102873.png" alt="image-20210608215400269" style="zoom:80%;" />
