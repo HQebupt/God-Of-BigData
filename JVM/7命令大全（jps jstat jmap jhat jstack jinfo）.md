@@ -258,7 +258,7 @@ F : 当-dump没有响应时，强制生成dump快照
 - -dump
 
 ```
--dump::live,format=b,file=<filename> pid 
+-dump:live,format=b,file=<filename> pid 
 ```
 
 dump堆到文件,format指定输出格式，live指明是活着的对象,file指定文件名
