@@ -564,6 +564,8 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
 - 特性：顺序一致性（主要是写操作的严格顺序性，每个更新请求都会分配一个全局唯一的递增编号）、原子性、单一视图（Single System Image）、可靠性（只要集群中有超过一半的机器能工作整个集群就能对外提供服务）、实时性（ZK将全量数据存储在内存中，因此适合读操作为主的应用场景）
 
+- CP系统，分析A:极端情况下，不能保证每次服务请求的可用性；leader选举时集群都是不可用。
+
 - 三种角色：Leader、Follower、Observer，Leader 提供读写，Follower 和 Observer 只提供读服务，Observer 不参与 Leader 选举过程，也不参与写操作的“过半写成功”策略，因此 Observer 可以不影响写性能的情况下提升集群读性能
   - leader职责是接受所有客户端请求，协调内部各个服务器。 
   - follower职责是处理客户端非事务请求，参与Proposal的投票和leader选举。
