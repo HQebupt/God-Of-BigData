@@ -541,3 +541,28 @@ override def run(): Unit = {
     - 依赖apis：KafkaApis类，用于真正实现请求处理逻辑的类
   - KafkaRequestHandlerPool：请求处理线程池，负责创建、维护、管理和销毁下辖的 请求处理线程。
 - 细节上：Data plane 所属的 KafkaRequestHandlerPool 线程池的初始数量，就是 Broker 端的参数 nums.io.threads=8， Control plane 的线程池的数量，则硬编码为 1，队列长度20.
+
+#### KafkaApis
+
+![image-20210707221412697](4Kafka源码.assets/image-20210707221412697.png)
+
+- ApiKeys，枚举类型，封装了所有的 RPC 协议
+
+KafkaApis 实际上是把处理完成的 Response 放回到前端 Processor 线程的 Response 队列中，而真正将 Response 返还给 Clients 或其他 Broker 的，其实是 Processor 线程，而不是执行 KafkaApis 逻辑的 KafkaRequestHandler 线程
+
+<img src="4Kafka源码.assets/image-20210708091616764.png" alt="image-20210708091616764" style="zoom:50%;" />
+
+
+
+## 3 Controller
+
+- 为Partition选举leader副本；
+- 全部元数据信息，同步到Broker 
+
+<img src="4Kafka源码.assets/image-20210708092021496.png" alt="image-20210708092021496" style="zoom:50%;" />
+
+<img src="4Kafka源码.assets/image-20210708092608515.png" alt="image-20210708092608515" style="zoom:50%;" />
+
+- IsrChangeNotification 事件是标志 ISR 列表变更的事件，如果这个事件经常出现，说明副本的 ISR 列表经常发生变化，而这通常被认为是非正常情况，因此，你最好关注下这个事件的速率监控指标。
+
+- offlinePartitionCount**该字段统计集群中所有离线或处于不可用状态的主题分区数量**

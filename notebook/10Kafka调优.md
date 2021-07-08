@@ -59,3 +59,13 @@ control.plane.listener.name=CONTROLLER
 - LocalTimeMs：计算 Request 实际被处理的时间，单位是毫秒。一旦定位到这个监控项的值很大，你就需要进一步研究 Request 被处理的逻辑了，具体分析到底是哪一步消耗了过多的时间。
 - RemoteTimeMs：Kafka 的读写请求（PRODUCE 请求和 FETCH 请求）逻辑涉及等待其他 Broker 操作的步骤。RemoteTimeMs 计算的，就是等待其他 Broker 完成指定逻辑的时间。因为等待的是其他 Broker，因此被称为 Remote Time。这个监控项非常重要！Kafka 生产环境中设置 acks=all 的 Producer 程序发送消息延时高的主要原因，往往就是 Remote Time 高。因此，如果你也碰到了这样的问题，不妨先定位一下Remote Time 是不是瓶颈。（**项目经验：某些topic的Producer的延迟在ack=all的情况下特别高，RemoteTimeMs达到了1s以上，副本broker ping延迟查过了500ms，网络交换机出现了问题，更换交换机**）
 - TotalTimeMs：计算 Request 被处理的完整流程时间。这是最实用的监控指标，没有之一！毕竟，我们通常都是根据 TotalTimeMs 来判断系统是否出现问题的。一旦发现了问题，我们才会利用前面的几个监控项进一步定位问题的原因。
+
+## 案例3-新浪案例
+
+某些核心业务的Partion一直处于“不可用”状态，分区的 Leader 显示是 -1。
+
+背景：Leader 所在的 Broker 因为负载高宕机， 重启后，Controller 无法分区选举 Leader，因此，“不可用”。
+
+- 手动删除了 /controller 。源码中的 **ControllerZNode.path** 上，也就是 ZooKeeper 的 /controller 节点。
+
+offlinePartitionCount**该字段统计集群中所有离线或处于不可用状态的主题分区数量**
