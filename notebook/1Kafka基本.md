@@ -426,6 +426,8 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 2. ISR(In Sync Replica): 保持与Leader同步的副本。判断条件是什么？只有1个，看lag落后的时间，10s。更细致地讲，Broker启动的时候，会有2个线程做什么？
 
+   1. ACK=all，leader收到数据后，只要ISR的follower完成数据的同步之后，就回复ack给客户端。
+
 3. 如果Leader挂了，就会引发Leader Select，领导者选举。调用配置的**分区选择算法**选择分区的leader
 
    ![img](1Kafka基本.assets/v2-2ca43f116ec7b08b30d7d7eaa060bead_1440w-4431075.jpg)
@@ -473,6 +475,8 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 
 ### 27 高水位HW和Leader Epoch（面试重点）
+
+<img src="1Kafka基本.assets/image-20210709113206365.png" alt="image-20210709113206365" style="zoom:50%;" />
 
 1. HW和 log endof offset 是什么？有什么作用？HW是以提交的位移最大值+1， Log End Offset是当前最新的消息位置。
    1. HW以下的消息是可见的，就是可以消费的
