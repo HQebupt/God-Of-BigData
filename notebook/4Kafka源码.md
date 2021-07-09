@@ -566,3 +566,49 @@ KafkaApis 实际上是把处理完成的 Response 放回到前端 Processor 线�
 - IsrChangeNotification 事件是标志 ISR 列表变更的事件，如果这个事件经常出现，说明副本的 ISR 列表经常发生变化，而这通常被认为是非正常情况，因此，你最好关注下这个事件的速率监控指标。
 
 - offlinePartitionCount**该字段统计集群中所有离线或处于不可用状态的主题分区数量**
+
+<img src="4Kafka源码.assets/image-20210708212058487.png" alt="image-20210708212058487" style="zoom:33%;" />
+
+- LeaderAndIsrRequest：告诉 Broker 相关主题各个分区的 Leader 副本位于哪台 Broker 上、ISR 中的副本都在哪些 Broker 上。
+
+- StopReplicaRequest：告知指定 Broker 停止它上面的副本对象，使用场景，是**分区副本迁移**和**删除主题**。
+
+- UpdateMetadataRequest：更新 Broker 上的元数据缓存。
+
+> 自 0.11.0.0 版本开始，社区陆续对 Controller 代码结构进行了改造。其中非常重要的一环，就是将**多线程并发访问的方式改为了单线程的事件队列方式**。
+
+- Controller外部的事件到来，存放在事件队列，然后ControllerEventThread线程，根据取出事件，根据需要分发给各个Broker对应的请求阻塞队列里面去
+- 每个RequestSendThread都从各自的阻塞队列里面拿出请求，发给对应的Broker。
+
+<img src="4Kafka源码.assets/image-20210708222029442.png" alt="image-20210708222029442" style="zoom:50%;" />
+
+```scala
+ControllerEventManager代码：
+private val queue = new LinkedBlockingQueue[QueuedEvent] // 事件队列
+private[controller] val thread = new ControllerEventThread(ControllerEventThreadName) // 单一线程：处理不同种类的 ControllorEvent
+```
+
+Controller采用生产者消费者模式，如下。![image-20210708212547157](file:///Users/huangqiang/Documents/downdown/God-Of-BigData/notebook/4Kafka%E6%BA%90%E7%A0%81.assets/image-20210708212547157.png?lastModify=1625754521)
+
+- 为每一个 Broker 都创建一个对应的 RequestSendThread 线程。从阻塞队列中获取待发送的请求。
+
+```scala
+// ControllerChannelManager代码：
+messageQueue：请求消息阻塞队列。你可以发现，Controller 为每个目标 Broker 都创建了一个消息队列。
+```
+
+
+
+RequestSendThread线程逻辑
+
+![image-20210708213037620](file:///Users/huangqiang/Documents/downdown/God-Of-BigData/notebook/4Kafka%E6%BA%90%E7%A0%81.assets/image-20210708213037620.png?lastModify=1625754521)
+
+> 注意的是，RequestSendThread 线程对请求发送的处理方式与 Broker 处理请求不太一样。它调用的 sendAndReceive 方法在发送完请求之后，会原地进入阻塞状态，等待 Response 返回。只有接收到 Response，并执行完回调逻辑之后，该线程才能从阻塞队列中取出下一个待发送请求进行处理。
+
+#### 小结
+
+- Controller 端请求：Controller 发送三类请求给 Broker，分别是 LeaderAndIsrRequest、StopReplicaRequest 和 UpdateMetadataRequest。
+
+- RequestSendThread：该线程负责将请求发送给集群中的相关或所有 Broker。
+
+- 请求阻塞队列 + RequestSendThread：Controller 会为集群上所有 Broker 创建对应的请求阻塞队列和 RequestSendThread 线程。

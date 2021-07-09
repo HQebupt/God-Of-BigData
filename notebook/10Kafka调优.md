@@ -60,7 +60,7 @@ control.plane.listener.name=CONTROLLER
 - RemoteTimeMs：Kafka 的读写请求（PRODUCE 请求和 FETCH 请求）逻辑涉及等待其他 Broker 操作的步骤。RemoteTimeMs 计算的，就是等待其他 Broker 完成指定逻辑的时间。因为等待的是其他 Broker，因此被称为 Remote Time。这个监控项非常重要！Kafka 生产环境中设置 acks=all 的 Producer 程序发送消息延时高的主要原因，往往就是 Remote Time 高。因此，如果你也碰到了这样的问题，不妨先定位一下Remote Time 是不是瓶颈。（**项目经验：某些topic的Producer的延迟在ack=all的情况下特别高，RemoteTimeMs达到了1s以上，副本broker ping延迟查过了500ms，网络交换机出现了问题，更换交换机**）
 - TotalTimeMs：计算 Request 被处理的完整流程时间。这是最实用的监控指标，没有之一！毕竟，我们通常都是根据 TotalTimeMs 来判断系统是否出现问题的。一旦发现了问题，我们才会利用前面的几个监控项进一步定位问题的原因。
 
-## 案例3-新浪案例
+## 案例3-Controller-新浪案例
 
 某些核心业务的Partion一直处于“不可用”状态，分区的 Leader 显示是 -1。
 
@@ -69,3 +69,42 @@ control.plane.listener.name=CONTROLLER
 - 手动删除了 /controller 。源码中的 **ControllerZNode.path** 上，也就是 ZooKeeper 的 /controller 节点。
 
 offlinePartitionCount**该字段统计集群中所有离线或处于不可用状态的主题分区数量**
+
+为什么敢这么做？通读源码了解背后的原理。
+
+
+
+```java
+// zookeeper 上Controller的临时节点的内容
+{"version":1,"brokerid":0,"timestamp":"1585098432431"} // 序号为 0 的 Broker 是集群 Controller。
+cZxid = 0x1a
+ctime = Wed Mar 25 09:07:12 CST 2020
+mZxid = 0x1a
+mtime = Wed Mar 25 09:07:12 CST 2020
+pZxid = 0x1a
+cversion = 0
+dataVersion = 0
+aclVersion = 0
+ephemeralOwner = 0x100002d3a1f0000 // 字段不是 0x0，说明这是一个临时节点。
+dataLength = 54
+numChildren = 0
+```
+
+集群上所有的 Broker 都在实时监听 ZooKeeper 上的这个节点。这里的“监听”有两个含义。
+
+- **监听这个节点是否存在**。倘若发现这个节点不存在，Broker 会立即“抢注”该节点，即创建 /controller 节点。创建成功的那个 Broker，即当选为新一届的 Controller。
+
+- **监听这个节点数据是否发生了变更**。同样，一旦发现该节点的内容发生了变化，Broker 也会立即启动新一轮的 Controller 选举。
+
+### 案例4：创建了主题后，有些 Broker 依然无法感知到
+
+Kafka 0.10.0.1 在线上环境中，很多元数据变更无法在集群的所有 Broker 上同步了。具体表现为，创建了主题后，有些 Broker 依然无法感知到。
+
+我的第一感觉是 Controller 出现了问题，但又苦于无从排查和验证。后来，我想到，会不会是 Controller 端请求队列中积压的请求太多造成的呢？因为当时 Controller 所在的 Broker 本身承载着非常重的业务，这是非常有可能的原因。
+
+- 源码中新加了一个监控指标，用于实时监控 Controller 的请求队列长度。
+- 当更新到生产环境后，我们很轻松地定位了问题。果然，由于 Controller 所在的 Broker 自身负载过大，导致 Controller 端的请求积压，从而造成了元数据更新的滞后。精准定位了问题之后，解决起来就很容易了。后来，社区于 0.11 版本正式引入了相关的监控指标。
+
+UpdateMetadataRequest：更新 Broker 上的元数据缓存。集群上的所有元数据变更，都首先发生在 Controller 端，然后再经由这个请求广播给集群上的所有 Broker。在我刚刚分享的案例中，正是因为这个请求被处理得不及时，才导致集群 Broker 无法获取到最新的元数据信息。
+
+- 解决办法，既然Controller的负载太高了，就迁移Controller到比较低的机器上。
