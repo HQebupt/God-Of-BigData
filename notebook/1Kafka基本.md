@@ -430,6 +430,8 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 3. 如果Leader挂了，就会引发Leader Select，领导者选举。调用配置的**分区选择算法**选择分区的leader
 
+   - 选择 Leader 的规则，就是选择副本集合中首个存活且处于 ISR 中的副本作为 Leader。
+
    ![img](1Kafka基本.assets/v2-2ca43f116ec7b08b30d7d7eaa060bead_1440w-4431075.jpg)
 
    > 关键在于是否开启，是否开启unclean选举。

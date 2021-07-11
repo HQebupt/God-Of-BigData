@@ -612,3 +612,243 @@ RequestSendThread线程逻辑
 - RequestSendThread：该线程负责将请求发送给集群中的相关或所有 Broker。
 
 - 请求阻塞队列 + RequestSendThread：Controller 会为集群上所有 Broker 创建对应的请求阻塞队列和 RequestSendThread 线程。
+
+## 4 PartitionStateMachine：分区状态机
+
+每个 Broker 进程启动时，会在创建 KafkaController 对象的过程中，生成 ZkPartitionStateMachine 实例，而只有 Controller 组件所在的 Broker，才会启动分区状态机。
+
+**每个 Broker 启动时，都会创建对应的分区状态机和副本状态机实例，但只有 Controller 所在的 Broker 才会启动它们**
+
+- Controller负责分区Leader选举
+
+分区 4 类状态。
+
+- NewPartition：分区被创建。“未初始化”的分区，不能选举 Leader。
+
+- OnlinePartition：提供服务
+
+- OfflinePartition：下线状态。
+
+- NonExistentPartition：分区删除状态
+
+<img src="4Kafka源码.assets/image-20210711154411297.png" alt="image-20210711154411297" style="zoom:50%;" />
+
+#### 分区 Leader 选举的场景及方法
+
+- OfflinePartitionLeaderElectionStrategy：Leader 副本下线场景
+  - **1.assignments**
+    分区的副本列表。 Assigned Replicas， AR，Seq[Int]类型。**AR 是有顺序的，而且不一定和 ISR 的顺序相同！**
+    **2.isr**
+    所有与 Leader 副本保持同步的副本列表，包括leader，Seq[Int]。
+    **3.liveReplicas**
+    所有处于存活状态的副本。
+  - step1: 顺序搜索 AR 列表，并把第一个满足leader副本条件的选举为leader。
+  - step2: 如果没找到，看看是否开启了unclean选举
+    - 没有开启，选举失败
+    - 开启，找第一个存活的分区副本作为leader
+  
+- ReassignPartitionLeaderElectionStrategy：分区副本Reassign场景
+
+- PreferredReplicaPartitionLeaderElectionStrategy： 执行Preferred 副本 Leader 选举
+
+- ControlledShutdownPartitionLeaderElectionStrategy：关闭 Broker
+
+
+
+## 5 TimingWheel时间轮
+
+### 解决的问题
+
+Client发请求，服务端没有及时响应消息给调用端呢？调用端该如何处理超时的请求？
+
+- 每个请求一个定时任务（线程消耗大）
+- 一个线程每隔100ms判断所有请求是否超时（扫描频繁，耗CPU）
+- 时间轮（减少CPU扫描次数）
+
+### 使用场景
+
+- client请求超时处理。在高并发、高访问量的情况下，时钟轮每次只轮询一个时间槽位中的任务，这样会节省大量的 CPU。
+- 调用端与服务端的启动超时。以调用端为例，假设让应用 1 分钟内启动，如果超过 1 分钟则启动失败。在调用端启动时创建一个处理启动超时的定时任务，放到时钟轮里。
+- 延时请求。比如让一个任务几分钟之后发送一条消息出去。可以实现订单过期功能，用户下单10分钟没付款，就取消订单。
+- 定时心跳。心跳任务，放到时钟轮，运行完后，重设执行时间，重新放入时钟轮。
+
+ 3 个任务，分别是任务 A（90 毫秒之后执行）、任务 B（610 毫秒之后执行）与任务 C（1 秒 610 毫秒之后执行），因此，任务 A 被放到第 0 槽位，任务 B 被放到第 6 槽位，任务 C 被放到下一层时间轮的第 1 槽位。
+
+<img src="4Kafka源码.assets/image-20210711172218047.png" alt="image-20210711172218047" style="zoom:33%;" />
+
+- 任务 A被即刻执行
+- 600 毫秒之后，当前槽位是第 6 槽位，第 6 槽位所有的任务都被取出执行；
+- 1 秒钟之后，当前时钟轮重新开始了第 0 跳，下一层时钟轮从第 0 跳跳到了第 1 跳，将第 1 槽位的任务取出，放入到**当前的时钟轮**中第 6 槽位，等600ms后，任务 C 被执行。
+
+<img src="4Kafka源码.assets/image-20210711172801761.png" alt="image-20210711172801761" style="zoom:67%;" />
+
+### 注意
+
+- 时间槽位的单位时间越短，时间轮触发任务的时间就越精确。
+- 时间轮的槽位越多，那么一个任务被重复扫描的概率就越小，因为只有在多层时钟轮中的任务才会被重复扫描。
+- 业务场景而定，对时钟轮的周期和时间槽数进行设置。
+
+
+
+> 几乎所有的时间任务调度系统都是基于时间轮算法的。Linux的 Crontab、 Netty 
+
+- 简单时间轮（Simple Timing Wheel）和分层时间轮（Hierarchical Timing Wheel）两类。两者各有利弊，也都有各自的使用场景。
+
+- Kafka的应用场景：对ack=all的生产者消息，是一种延时请求，采用时间轮解决，扛住几十万的延时请求并发。
+
+![image-20210711174525920](4Kafka源码.assets/image-20210711174525920.png)
+
+- 槽位的实现是Bucket(TimerTaskList)，双向循环链表
+  - taskCounter，总定时任务数
+  - expiration，过期时间戳
+- 一跳的实现是Tick
+- Kafka 使用DelayQueue 统一管理所有的 Bucket， TimerTaskList 对象，重用过期的Bucket。
+
+
+
+每个 Bucket 是一个双向循环链表（Doubly Linked Cyclic List），里面保存了一组延时请求。
+
+![image-20210711165024937](4Kafka源码.assets/image-20210711165024937.png)
+
+### TimeWheel 重要字段
+
+- tickMs：滴答一次的时长， 1 毫秒
+
+- wheelSize：时间轮上的 Bucket 数量。数量是 20。
+
+- startMs：时间轮对象被创建时的起始时间戳。
+
+- taskCounter：总定时任务数。
+
+- queue：所有 Bucket 按照过期时间排序的延迟队列。
+
+- interval：这层时间轮总时长，=滴答时长* wheelSize
+- buckets：时间轮下的所有 Bucket 对象
+
+- **currentTime：当前时间戳** ，控制时钟轮的当前时间，将它设置成小于当前时间的最大滴答时长的整数倍。
+
+- overflowWheel：Kafka 是按需创建上层时间轮的。这也就是说，当有新的定时任务到达时，会尝试将其放入第 1 层时间轮。如果第 1 层的 interval 无法容纳定时任务的超时时间，就现场创建并配置好第 2 层时间轮，并再次尝试放入。
+  - 1层，一跳的间隔是1ms，20ms以内的延时请求就放在这里
+  - 2层，20ms，400ms
+  - 3层，400ms，8s
+  - 4层，8s，160s （如果是生产者消息30s超时，刚开始的时候，就会放在第4层时间轮）
+
+advanceClock 方法：向前推进时钟，执行已达过期时间的延迟任务。
+
+```scala
+def advanceClock(timeMs: Long): Unit = {
+  // 向前驱动到的时点要超过Bucket的时间范围，才是有意义的推进，否则什么都不做
+  // 更新当前时间currentTime到下一个Bucket的起始时点
+  if (timeMs >= currentTime + tickMs) {
+    currentTime = timeMs - (timeMs % tickMs)
+    // 同时尝试为上一层时间轮做向前推进动作
+    if (overflowWheel != null) overflowWheel.advanceClock(currentTime)
+  }
+}
+```
+
+
+
+### 底层实现SystemTimer
+
+SystemTimer 是一个定时器类，封装了分层时间轮对象，轮询时间轮，为 Purgatory 提供延迟请求管理功能。
+
+```scala
+
+class SystemTimer(executorName: String,
+                  tickMs: Long = 1,
+                  wheelSize: Int = 20,
+                  startMs: Long = Time.SYSTEM.hiResClockMs) extends Timer {
+  // 单线程的线程池用于异步执行定时任务
+  private[this] val taskExecutor = Executors.newFixedThreadPool(1,
+    (runnable: Runnable) => KafkaThread.nonDaemon("executor-" + executorName, runnable))
+  // 延迟队列保存所有Bucket，即所有TimerTaskList对象
+  private[this] val delayQueue = new DelayQueue[TimerTaskList]()
+  // 总定时任务数
+  private[this] val taskCounter = new AtomicInteger(0)
+  // 时间轮对象
+  private[this] val timingWheel = new TimingWheel(
+    tickMs = tickMs,
+    wheelSize = wheelSize,
+    startMs = startMs,
+    taskCounter = taskCounter,
+    delayQueue
+  )
+  // 维护线程安全的读写锁
+  private[this] val readWriteLock = new ReentrantReadWriteLock()
+  private[this] val readLock = readWriteLock.readLock()
+  private[this] val writeLock = readWriteLock.writeLock()
+  ......
+}
+```
+
+### 
+
+- 添加1个任务：根据定时任务的状态，不同的处理。
+
+  - 如果该任务既未取消也未过期，那么，addTimerTaskEntry 方法将其添加到时间轮；
+
+    如果该任务已取消，则该方法什么都不做，直接返回；
+
+    如果该任务已经过期，则提交到相应的线程池，等待后续执行。
+
+- - ```scala
+    def add(timerTask: TimerTask): Unit = {
+      // 获取读锁。在没有线程持有写锁的前提下，
+      // 多个线程能够同时向时间轮添加定时任务
+      readLock.lock()
+      try {
+        // 调用addTimerTaskEntry执行插入逻辑
+        addTimerTaskEntry(new TimerTaskEntry(timerTask, timerTask.delayMs + Time.SYSTEM.hiResClockMs))
+      } finally {
+        // 释放读锁
+        readLock.unlock()
+      }
+    }
+    ```
+
+  - 
+
+- 删除1个任务
+
+- 推进时间tick
+
+  * 遍历 delayQueue 中的所有 Bucket，并将时间轮的时钟依次推进到它们的过期时间点，令它们过期。然后，再将这些 Bucket 下的所有定时任务全部重新插入回时间轮。
+
+  - ```scala
+    def advanceClock(timeoutMs: Long): Boolean = {
+      // 获取delayQueue中下一个已过期的Bucket
+      var bucket = delayQueue.poll(
+        timeoutMs, TimeUnit.MILLISECONDS)
+      if (bucket != null) {
+        // 获取写锁
+        // 一旦有线程持有写锁，其他任何线程执行add或advanceClock方法时会阻塞
+        writeLock.lock()
+        try {
+          while (bucket != null) {
+            // 推动时间轮向前"滚动"到Bucket的过期时间点
+            timingWheel.advanceClock(bucket.getExpiration())
+            // 将该Bucket下的所有定时任务重写回到时间轮
+            bucket.flush(reinsert)
+            // 读取下一个Bucket对象
+            bucket = delayQueue.poll()
+          }
+        } finally {
+          // 释放写锁
+          writeLock.unlock()
+        }
+        true
+      } else {
+        false
+      }
+    }
+    
+    ```
+
+    <img src="4Kafka源码.assets/image-20210711182138574.png" alt="image-20210711182138574" style="zoom:50%;" />
+
+### 请求是如何被加入到延时请求队列的
+
+- Broker收到请求，**能立即完成的请求马上完成，否则就放入到名为 Purgatory 的缓冲区中**。
+- 然后由DelayedOperationPurgatory 管理的时钟轮自动地处理这些延迟请求。
+
