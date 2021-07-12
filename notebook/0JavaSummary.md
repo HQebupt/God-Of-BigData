@@ -464,7 +464,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
 #### Concurrent Mark Sweep
 
-- 几个概念、数据结构
+- 概念、数据结构
 
   - DirtyCard
   - Mod-Union Table（具体实现是Bitmap，标识新生代晋升、直接在老年代分配、老年代引用关系变更的对象）
@@ -495,7 +495,32 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   - final remark存在风险，停顿时间可能过长
   - 大内存性能差，GC时间不可控
 
+### 调优
 
+- 单次停顿过长
+  - Xmx、Xms
+  - AlwayPretouch、Swap、Cpu load
+  - Concurrent GC Thread
+- 频率较高，整体吞吐率低
+- 回收率较低（新生代、老年代）
+- 导致 FullGC 的失败
+  - CMS Failure：PromotionFailed、ConcurrentModeFailure
+  - G1 Failure：EvacuationFailure、Humongous Object Fragmentation
+- G1：MixedGC 慢、UPdateRS、ScanRS 慢、Object Copy 慢
+- MixedGC 调优：
+  - -XX:G1MixedGCCountTarget，增加次数降低单次延迟
+  - -XX:G1MixedGCLiveThresholdPercent，避免将较满的 Region 加入候选
+  - -XX:G1HeapWastePercent，增加堆的冗余度
+- 更造触发 GC 避免单次GC停顿过长
+  - -XX:-G1UseAdaptiveIHOP and -XX:InitiatingHeapOccupancyPercent
+- sys、user、real
+
+**详细版**
+
+- -XX:+AlwaysPreTouch，启动的时候真实的分配物理内存给JVM
+  - 新生代对象晋升，要为老年代先分配物理内存，影响了新生代GC的效率。
+  - 优点：加快代码运行效率，缺点：启动时间变慢。
+- 
 
 ## 4分布式原理和zookeeper
 
