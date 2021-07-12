@@ -55,8 +55,8 @@
 - 老版本并发扩容时可能导致形成环形链表导致读取死循环
 
 - getNode代码
-    - 用key的hash值去查询内部数组tab能否命中；如果没命中，就返回null。
-    - 命中之后，再次比较key是不是相等。根据key是红黑树还是链表来查找
+  - 用key的hash值去查询内部数组tab能否命中；如果没命中，就返回null。
+  - 命中之后，再次比较key是不是相等。根据key是红黑树还是链表来查找
 
 ```java
     final Node<K,V> getNode(int hash, Object key) {
@@ -81,12 +81,13 @@
 ```
 
 - putVal代码
+
   - 如果内部数组Table为空，先初始化表（resize）
   - 计算 key的hash 值，在数组的对应 index 上插入新值，如果当前数组对应位置为空，直接插入
   - 如果数组上对应位置已有值
     - 判断该 Node 是否为 TreeNode，如果是 TreeNode 则直接插入
     - 如果是 List，在链表尾部插入的同时，记录 binCount，若 binCount > 8 将链表转换为树
-  
+
   ```java
       final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
                      boolean evict) {
@@ -132,6 +133,7 @@
       }
   
   ```
+
 #### 2.2 ConcurrentHashMap
 
 > 漏掉了CopyOnWriteArrayList，后期有时间，补上。TODO
@@ -167,13 +169,16 @@
 @jdk8 改为 CAS 设计，更细力度地控制锁，①对于一个空的Node，CAS无锁添加；对于非空的Node，对Node加锁（synchronized，锁可以被优化）；增加 addCount 方法专门记录 size ；并发修改一个下标的 Node 时才加 synchronized ，并且只锁定当前的 Node
 
 - 取值操作不阻塞，因此与更新操作会有所重叠；取值操作反映最近正好已完成的更新，即这种反映遵循一种 happen-before 的关系；批量操作时，并发取值操作操作反映部分的插入、移除的结果，而非批量操作的整体完成后的结果；同理，迭代器操作反映的是迭代器创建那一刻的结果集
+
 - isEmpty、size、containsValue 只在 map 不并发更新的时候准确，适合用于监控或估算，而不适于程序控制；不支持 Null Key/Value
+
 - putVal
+
   - 计算 hash 值，自旋访问 table，table 为空则采用 CAS 初始化 table
   - 获取 hash 值对应节点位置 i，若该位置为空则 CAS 插入
   - 若有HashMap在扩容，则先执行 helpTransfer 帮助迁移到新 table。会再次自旋进入循环体。
   - 否则，以当前节点的链表、树的头结点为 lock 加锁，进行 add 操作
-  
+
   > 可以发现，和HashMap的putVal流程很类似，区别在于由于并发性，ConcurrentHashMap有CAS操作和synchronized。
 
 ```java
@@ -322,26 +327,13 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 - WeakReference 引用的对象，当没有强引用指向它后，将在 GC 时被回收；如果其作为 Map.Entry 中的key，则整个 Entry 会被移除。
 
 ```java
-    Obejct reference = new Object();
-    WeakReference<Obejct> weakRef = new WeakReference<>(reference);
-
-    reference = null;
-    System.gc(); // 被回收
-    AssertNull(weakRef.get())
+    Obejct reference = new Object();    WeakReference<Obejct> weakRef = new WeakReference<>(reference);    reference = null;    System.gc(); // 被回收    AssertNull(weakRef.get())
 ```
 
 - SoftReference 与 WeakReference 特性类似，区别在于 SoftReference 被回收的时机是在 JVM 内存不足之时；因此适合用于做缓存
 
 ```java
-		String str = new String("abc");
-		SoftReference<String> softReference = new SoftReference<String>(str);
-		// 浏览器的回退可以用缓存设计：
-    if(softReference.get() != null) {
-        page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存
-    } else {
-        page = browser.getPage();// 内存不足，软引用的对象已经回收
-        softReference = new SoftReference(page);// 重新构建软引用
-    }
+		String str = new String("abc");		SoftReference<String> softReference = new SoftReference<String>(str);		// 浏览器的回退可以用缓存设计：    if(softReference.get() != null) {        page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存    } else {        page = browser.getPage();// 内存不足，软引用的对象已经回收        softReference = new SoftReference(page);// 重新构建软引用    }
 ```
 
 - PhantomReference，调用 get 永远返回 null，用于跟踪引用何时被 enqueue 至 ReferenceQueue 中.**虚引用必须和引用队列(ReferenceQueue)联合使用**。
@@ -351,10 +343,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   > 对于用户来看，如果程序发现某个虚引用已经被加入到ReferenceQueue，那么回收之前采取一些行动。
 
 ```java
-    String str = new String("abc");
-    ReferenceQueue queue = new ReferenceQueue();
-    // 创建虚引用，要求必须与一个引用队列关联
-    PhantomReference pr = new PhantomReference(str, queue);
+    String str = new String("abc");    ReferenceQueue queue = new ReferenceQueue();    // 创建虚引用，要求必须与一个引用队列关联    PhantomReference pr = new PhantomReference(str, queue);
 ```
 
 ## 3 JVM
@@ -476,17 +465,23 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   ![image-20210712093543873](0JavaSummary.assets/image-20210712093543873.png)
 
   - CMS-initial-mark, STW，初始标记 GC-Roots 可达对象：遍历新生代对象，标记可达的老年代对象；默认单线程，可通过配置调整为多线程（-XX:+CMSParallelInitialMarkEnabled）
+
   - CMS-concurrent-mark，遍历 initial-mark 标记的对象，递归标记这些对象可达的对象，针对老年代引用关系变更记录 Dirty Card，新生代对象晋升记录 Mod-Union Card（若某个CardTable中的Card中记录为1，YoungGC 时扫描该 Card 发现没有持有新生代的引用，那么该 Card 清除，并将 Mod-Union Card 中对应元素置为 1）
+
     - CMS-concurrent-clean，optional，默认开启；处理因为上阶段过程中，引用关系改变，未标记的对象变成存活的，会扫描Dirty的Card。如下图的的3和6，在上阶段是未标记对象，即不可达对象。
-    
+
     <img src="0JavaSummary.assets/image-20210712104338118.png" alt="image-20210712104338118" style="zoom: 50%;" />
-    
+
     - CMS-concurrent-abortable-preclean， Optional ，承担下一个阶段Final Remark阶段足够多的工作，期待能够发送一次YoungGC。若 Eden 区 CMSScheduleRemarkEdenSizeThreshold=2M，则略过此步骤；否则循环执行 concurrent-mark ，直到 1）达到设置的循环次数（默认0），2）达到执行时间限制（默认5s），Eden 区内存使用率达到阈值 CMSScheduleRemarkEdenPenetration（默认50%）；可通过 CMSScavengeBeforeRemark 配置每次 abortable-preclean 都触发一次 Young GC。
+
   - CMS-final-remark，STW，**标记整个老年代的所有的存活对象**。具体：遍历新生代对象重新标记，根据老年代GC Roots重新标记，遍历老年代 Dirty Card 重新标记（大部分 Dirty Card 已经在 clean 阶段处理过）。（耗时长，则提前触发一次YoungGC）
+
   - CMS-concurrent-sweep，回收不可达对象，三种情况下会触发压缩：
+
     - UseCMSCompactAtFullCollection (默认true)和CMSFullGCsBeforeCompaction(默认0)时每次GC都进行压缩（其实是整理）
     - 执行了System.gc()
     - 新生代分配担保失败
+
   - CMS-concurrent-reset，重置CMS内部的数据结构，进入下一个CMS生命周期
 
 - 存在的问题
@@ -494,6 +489,68 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   - 长时间运行内存碎片化
   - final remark存在风险，停顿时间可能过长
   - 大内存性能差，GC时间不可控
+
+#### G1
+
+标记-整理，局部（两个 Region 之间）“复制”，无内存空间碎片。
+
+- 几个重要的数据结构：
+  - Region、CSet（CollectionSet）多个 Region 构成回收集
+  - G1 Remembered Set：记录本Region中所有对象引用的对象所在的区域（我指向谁，谁指向我），防止全堆扫描
+
+![image-20210712133452256](0JavaSummary.assets/image-20210712133452256.png)
+
+* 初始标记（Initial Marking)：STW，一条初始标记线程对所有与 GC Roots 直接关联的对象进行标记。触发一次Mintor GC。
+* 并发标记(Concurrent Marking)：使用**一条**标记线程与用户线程并发执行。速度很慢。此外，当 对象 图 扫描 完成 以后， 还要 重新 处理 SATB 记 录下 的 在 并发 时有 引用 变动 的 对象。
+* 最终标记（Final Marking）：STW。再标记阶段是用来收集 并发标记阶段 产生新的垃圾(并发阶段和应用程序一同运行)；G1中采用了比CMS更快的初始快照算法:snapshot-at-the-beginning (SATB)。
+* 筛选回收（Live Data Counting and Evacuation）：STW，统计Region数据，回收价值和成本排序，根据期望停顿时间来回收。回收单元是Collection Set，复制到空Region，多线程。
+
+
+
+**另外一种源码阐述**
+
+- 每次回收都只回收 CSet（Collection Set）中的 Region ，YoungGC 即 CSet 中只包含 young region 、 MixedGC 则是 Cset 中包含 young region 和 old region
+- 混合 GC 的触发条件：触发阈值 -XX:InitiatingHeapOccupancyPercent(默认45%)
+- 混合 GC 的步骤
+  - Initial Mark，STW，借助一次 YoungGC 完成，标记可能持有老年代对象引用的Survivor Region，同时初始化TAMS指针用于记录新分配对象
+  - Root Region Scanning，并发执行，扫描 Survivor 区根引用，必须在下一次 YoungGC 到来之前完成
+  - Concurrent Marking，并发执行，寻找整个堆空间中存活的对象，可被一次YoungGC中断
+  - Remark，STW，完成最终的整堆存活对象标记，使用 SATB 算法
+  - Cleanup，统计存活对象和完全空闲的 Region（STW)，擦除 RSet 内容（STW），重置空的 Region 并将其返还给 free list（并发）
+  - Copying，STW，拷贝存活对象到新的未使用的 Region 空间，可以是 YoungGC，也可以是 MixedGC 时发生
+
+#### SATB
+
+混合GC使用的标记算法：Snapshot at the Begining
+
+- ConcurrentG1RefineThread，只专注扫描日志缓冲区记录的卡片来维护更新RSet
+
+- pre-write barrier，post-write barrier
+
+- logging write barrier
+
+  - SATBMarkQueue，SATBMarkQueueSet（pre-write barrier）
+  - DirtyCardQueue，DirtyCardQueueSet（post-write barrier，解决的是RSet指向关系变更的问题）
+  - 为减少 write barrier 对 mutator 的性能影响，G1 收集器将部分 barrier 的逻辑记录到队列（SATBMarkQueue、DirtyCardQueue）中，再由其他线程消费队列批量处理
+
+- 简要原理：把 marking 开始时的逻辑快照里所有的活对象都看作活的，具体做法是在 write barrier 里把所有旧的引用所指向的对象都变成非白的（已经黑灰就不用管，还是白的就变成灰的）
+
+- 解决的问题：CMS 重新标记阶段暂停时间过长的风险
+
+- 通过 TAMS 指针识别并发 GC 过程中新分配的对象，新分配的都认为的活的对象（隐式标记）
+
+- TAMS（top at mark start），previous TAMS，next TAMS
+
+  ![img](0JavaSummary.assets/120135.png)
+
+  - 第 A 步：初始标记阶段，需要 STW，将扫描 Region 的 Top 值赋值给nextTAMS
+  - 第 A ~ B 步之间：会发生并发标记阶段
+  - 第 B 步：重新标记阶段，此时并发标记阶段生成的新对象都会被分配在 [nextTAMS, Top] 之间，这些对象会被定义为“隐式对象”，同时 _next_mark_bitmap 也开始存储nextTAMS标记的对象的地址
+  - 第 C 步：清除阶段，_next_mark_bitmap 和 _prev_mark_bitmap 会进行交换，同时清理 [Bottom, previousTAMS] 之间被标记的所有对象，对于“隐式对象”会在下次垃圾收集过程进行回收（如第 F 步），这也是 SATB 存在弊端，会一定程度产生未能在本次标记中识别的浮动垃圾
+
+- 存在的问题
+  - 要维护数量众多的跨 Region 引用，需要复杂的卡表，消耗大量内存；CMS 只需一张老年代到新生代的卡表
+  - 需要写前屏障来维护大量卡表，还需要写后屏障来维护原始快照
 
 ### 调优
 
@@ -515,28 +572,41 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   - -XX:-G1UseAdaptiveIHOP and -XX:InitiatingHeapOccupancyPercent
 - sys、user、real
 
+
+
+![img](0JavaSummary.assets/119900.png)
+
 **详细版**
 
 - -XX:+AlwaysPreTouch，启动的时候真实的分配物理内存给JVM
   - 新生代对象晋升，要为老年代先分配物理内存，影响了新生代GC的效率。
   - 优点：加快代码运行效率，缺点：启动时间变慢。
-- 
 
-## 4分布式原理和zookeeper
+## 4 分布式协议
 
 - CAP
-  - 一致性、可用性（**有限时间**内**返回结果**）、分区容错性（部分子网络故障不会导致整个系统不可用）
+
+  - 一致性（各节点间的数据一致）、可用性（**有限时间**内**返回结果**）、分区容错性（部分子网络故障不会导致整个系统不可用）
     - 一致性分为
       - 强一致性
-      - 单调一致性 (用户一旦读到某个数据在某次更新后的值，就不会再读到比这个值更旧的值)
-      - 会话一致性（TODO)
-      - 最终一致性
+      - 单调一致性 
+      - 会话一致性
+      - **最终一致性**：用户只能读到某次更新后的值，但系统保证数据将最终达到完全一致的状态，只是所需时间不能保障。
       - 弱一致性
-    - 可用性
-      - 从实践的角度来看，即服务是否在任何时刻都可以不超时地响应请求（排除网络超时）
 
 - BASE
+
+  - 核心：基本可用（Basically Available）和最终一致性（Eventually consistent）
+  - **基本可用的方法：流量削峰、延迟响应、体验降级、过载保护**
   - Basically Available（响应时间增加、功能部分损失如降级）、Soft state（允许不同节点数据副本之间进行数据带来的延迟）、Eventually consistent（数据经过一段时间同步后最终能到达一个一致的状态）
+
+  实现最终一致性的具体方式？
+
+  - 读时修复：在读取数据时，检测数据的不一致，进行修复。
+
+  - 写时修复：在写入数据，检测数据的不一致时，进行修复。
+
+  - **异步修复：这个是最常用的方式，通过定时对账检测副本数据的一致性，并修复。**
 
 ### 2PC
 
@@ -589,55 +659,297 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
   
 
-### Paxos (consensus, not consistency) TODO,而且没总结完
+### Paxos
 
-- 三个角色：Proposer、Acceptor、Learner，具体实现中，一个进程可能充当不止一种角色
+-  Basic Paxos 算法，描述的是多节点之间如何就某个值（提案 Value）达成共识；
+-  Multi-Paxos 思想，描述的是执行多个 Basic Paxos 实例，就一系列值达成共识。
 
+
+
+- 三个角色：Proposer、Acceptor、Learner
 - 通过不断加强这个约束：“在一次Paxos算法执行实例中，只批准一个value”，获得了 Paxos 算法
+- 论文里，Acceptor保证**三个重要的承诺**：
+  - 如果准备请求的提案编号，**小于等于**接受者已经响应的准备请求的提案编号，那么接受者将承诺不响应这个准备请求；
+  - P1a: 如果接受请求中的提案的提案编号，**小于**接受者已经响应的准备请求的提案编号，那么接受者将承诺不通过这个提案；
+  - P2c: 如果接受者之前有通过提案，那么接受者将承诺，会在准备请求的响应中，包含**已经通过的最大编号的提案信息**。
 
-  - P1：一个Acceptor必须接受（Accept）它收到的第一个提案
+**Basic Paxos算法流程**
 
-  - P2：一旦一个具有 vn 的提案被批准（chosen），那么之后批准（chosen）的提案必须具有 vn
+<img src="0JavaSummary.assets/image-20210712140352312.png" alt="image-20210712140352312" style="zoom:67%;" />
 
-  - P2a：一旦一个具有 vn 的提案被批准（chosen），那么之后任何acceptor再次接受（accept）的提案必须具有 vn
+- 算法伪代码
 
-  - P2b：一旦一个具有 vn 的提案被批准（chosen），那么以后任何proposer提出的提案必须具有 vn
-
-  - P2c
-
-    ：如果一个编号为 n 的提案具有 v ，该提案被提出（issued），那么存在一个多数派S：
-
-    - 要么 S 中所有 Acceptor 都没有接受（accept）编号 < n 的任何提案
-    - 要么 S 中所有 Acceptor 已经接受（accept）的编号 < n 的某个提案，而已接收的编号最大的提案的值为 v
-
-  - **P1a**：当且仅当 acceptor 没有回应过编号大于 n 的 prepare 请求时，acceptor 接受（accept）编号为 n 的提案
+<img src="0JavaSummary.assets/120555.jpeg" alt="img" style="zoom:67%;" />
 
 - proposer 生成提案
 
   - prepare 阶段
+
     - proposer 选择一个新的提案编号 n ，然后发送请求给 acceptor 集合，并要求其作如下承诺：
-      - acceptor 收到 prepare 请求后，如果提案的编号大于它已经回复过的所有 prepare 消息(**回复消息表示接受 accept**)，则 acceptor 将自己上次接受的提案回复给 proposer，并承诺不再回复小于 n 的提案
-    - 举例说明：
-      - 假设一个 acceptor 已经响应过（accept）所有的 prepare 请求，对应提案编号为 1、2、3、...、7，那么 acceptor 接收到编号为 8 的 prepare 请求会，就会将编号为 7 的提案作为响应反馈给 proposer
+
+      - acceptor 收到 prepare 请求后，如果提案的编号大于它已经回复过的所有 prepare 消息(**回复消息表示接受  accept**)，则 acceptor 将自己上次接受的提案回复给 proposer，并承诺不再回复小于 n 的提案
+
+      - 举例说明：
+
+        假设一个 acceptor 已经响应过（accept）所有的 prepare 请求，对应提案编号为 1、2、3、...、7，那么 acceptor 接收到编号为 8 的 prepare 请求会，就会将编号为 7 的提案（7，value=x）作为响应反馈给 proposer 
+
   - accept 阶段
-    - 当一个 proposer 收到了多数 acceptors 对 prepare 的回复后，就进入批准（accept）阶段
-    - proposer 要向回复 prepare 请求的 acceptors 发送 accept 请求，包括编号 n 和根据 P2c 决定的 value（如果根据P2c没有已经接受的value，那么它可以自由决定value）
-    - 只要 acceptor 尚未对编号大于 n 的 prepare 请求响应，就可以通过这个提案
 
-- acceptor 批准提案
+    - 当一个 proposer 收到了多数 acceptors 对 prepare 的回复后，就进入批准（accept）阶段 
+    - proposer 要向回复 prepare 请求的 acceptors 发送 accept 请求，包括编号 n 和根据 P2c 决定的 value（如果根据P2c没有已经接受的value，那么它可以自由决定value） 
+    - 只要 acceptor 尚未对编号大于 n 的 prepare 请求响应，就可以通过这个提案 
 
-  - prepare 请求：acceptor 可以在任何时候响应一个 prepare 请求
-  - accept 请求：在不违背 acceptor 现有承诺的前提下，可以任意响应 Accept 请求（一个 acceptor 只要尚未响应任何编号大于 n 的 Prepare 请求，那么它就可以接受这个编号为 n 的提案）
+  - learner 提案获取（解决单个proposer向大量节点同步数据引起的性能问题）
 
-- learner 提案获取（解决单个proposer向大量节点同步数据引起的性能问题）
+    - 选取一批 learner 集合作为主 learner 集，acceptor 将批准的提案发送给这个集合，这个集合的每个 learner 可以在一个提案被选定后通知所有其他的 learner 
 
-  - 选取一批 learner 集合作为主 learner 集，acceptor 将批准的提案发送给这个集合，这个集合的每个 learner 可以在一个提案被选定后通知所有其他的 learner
+#### 优缺点
 
-- 算法伪代码
+- 优点，具有容错能力：当少于一半的节点出现故障的时候，共识协商仍然在正常工作。
+- 局限性：只能就单个值（Value）达成共识。
+- 活锁问题：多个Proposer的问题
+  - proposer-1 提出 n1，完成了阶段1(准备阶段) 
+  - 此时 proposer-2 提出 n2，也完成了阶段1
+  - 由于提案号n2>n1,于是 acceptor 忽略 proposer-1 发送的 accept 请求，这导致 proposer-1 再次进入阶段1（伪代码第6步）并提出 n3(n3>n2)，而如果它也完成了阶段1，就会导致  proposer-2 在阶段2的 Accept 请求被忽略 。
+  - 以此类推，提案选定过程将陷入活锁
+- 2轮RPC问题
 
-![img](0JavaSummary.assets/120555.jpeg)
+### Multi-Paxos
 
-### Raft Consensus Algorithm（TODO未总结）
+直接通过多次执行 Basic Paxos 实例，来实现一系列值的共识。
+
+- Basic Paxos只能对一个值形成决议，决议的形成至少需要2 轮 RPC 通讯，在高并发情况下需要更多的网络来回可能形成活锁 
+- Basic Paxos 无法支持连续确定多个值，因此 Basic Paxos 不适合应用在实际工程中 
+
+- Multi-Paxos 正是为解决此问题而提出，Multi-Paxos 基于 Basic Paxos 做了两点改进: 
+  1. 针对每一个要确定的值，运行一次 Paxos 算法实例（Instance），形成决议，每一个 Paxos 实例使用唯一的 Instance ID 标识 
+  2. 在所有 Proposers 中选举一个 Leader，由 Leader 唯一地提交 Proposal 给Acceptors 进行表决。
+     - Multi-Paxos 首先需要选举 Leader，可执行一次 Basic Paxos 实例来选举出一个  Leader 
+     - 选出 Leader 之后只能由 Leader 提交 Proposal，没有  Proposer 竞争，解决了活锁问题
+     - 在系统中仅有一个 Leader 进行 Proposal 提交的情况下，Prepare 阶段可以跳过 ，两阶段变为一阶段，提高效率 
+
+**改进点：**
+
+- 领导者节点作为唯一提议者。
+
+- 优化 Basic Paxos 执行
+  - “当领导者处于稳定状态时，省掉准备阶段，直接进入接受阶段”
+
+整个流程：
+
+![image-20210706145658776](0JavaSummary.assets/image-20210706145658776-1625554619751-6070133.png)
+
+## Raft
+
+**Raft 算法是通过一切以领导者为准的方式，实现一系列值的共识和各节点日志的一致。**
+
+> Raft 算法属于 Multi-Paxos 算法，做了一些简化和限制，比如增加了日志必须是连续的，只支持领导者、跟随者和候选人三种状态。**现在分布式系统开发首选的共识算法**，比如 Etcd、Consul
+
+如何保证在同一个时间，集群中只有一个领导者呢？
+
+服务器节点状态有3种：
+
+- 领导者（Leader）
+- 跟随者（Follower）: 接收和处理来自领导者的消息，当等待领导者心跳信息超时的时候，就主动站出来，推荐自己当候选人。
+- 候选人（Candidate）: 向其他节点发送请求投票（RequestVote）RPC 消息，通知其他节点来投票，如果赢得了大多数选票，就晋升当领导者。
+- ![img](0JavaSummary.assets/1089769-20181216202049306-1194425087-5929203-6070133.png)
+
+### 0 请求完整流程
+
+  当系统（leader）收到一个来自客户端的写请求，到返回给客户端，整个过程从leader的视角来看会经历以下步骤：
+
+- leader **append log entry**
+- leader issue AppendEntries RPC in parallel
+- leader wait for majority response, **committed**
+- leader **apply entry to state machine**
+- leader reply to client
+- leader notify follower apply log
+
+> Raft中，副本数据是以日志的形式存在的，领导者接收到来自客户端写请求后，处理写请求的过程就是一个复制和提交日志项的过程。
+
+### 1 选举领导者
+
+是属于Basic Paxos。
+
+- election timeout（wait until become candidate）
+  - 初始化在 150-300ms 之间，follower 等待超时后会成为 candidate 状态
+  - follower 成为 candidate 后就会发起一次新的选举任期，它会给自己投票，并向其他 node 发送 “Request Vote” 消息
+  - 接收到请求的node如果尚未投票且在此轮选举中，则直接投票给 candidate，并重置 election timeout
+- heartbeat timeout（heatbeat send interval）
+  - Leader定期向follower发送“Append Entries”消息，发送间隔为heartbeat timeout
+  - Follower响应Append Entries消息，并重置election timeout
+  - 整个状态不断维持，直到一个follower不再收到heartbeat
+
+- （全部是跟随者）初始状态下，集群中所有的节点都是跟随者的状态。
+
+<img src="0分布式协议.assets/image-20210706151804779.png" alt="image-20210706151804779" style="zoom: 50%;" />
+
+> Raft 算法实现了随机超时时间的特性。
+
+### 细节
+
+**节点间是如何通讯的呢？**RPC，2类RPC
+
+- （候选人）请求投票（RequestVote）RPC，是在选举期间发起，通知各节点进行投票；
+
+- （领导者）日志复制（AppendEntries）RPC，是由领导者发起，用来复制日志和提供心跳消息。
+
+**选举有哪些规则？**
+
+- **领导者发送心跳消息**（即不包含日志项的日志复制 RPC 消息），阻止跟随者发起新的选举。
+
+- 如果心跳超时，跟随者推举自己为候选人，发起领导者选举。
+- 每一个服务器节点最多会对一个任期编号投出一张选票，“先来先服务”。
+
+- 在选举中，赢得大多数选票的候选人，将晋升为领导者。
+
+对先来先服务的补充：
+
+- 当任期编号相同时，日志完整性高的跟随者（也就是最后一条日志项对应的任期编号值更大，索引号更大），拒绝投票给日志完整性低的候选人。
+
+![image-20210706153754030](0分布式协议.assets/image-20210706153754030-1625557075118.png)
+
+
+
+**随机超时时间又是什么？**
+
+解决选举过程中，选票被平均瓜分，导致选举无效的情况发生。（随机超时，可以让大多数情况下，只有1个节点先发起选举)
+
+- 心跳信息超时的时间间隔，是随机的；
+
+- 当没有候选人赢得过半票数，选举无效了，这时需要等待一个随机时间间隔，也就是说，等待选举超时的时间间隔，是随机的。
+
+### 与Multi-Paxos不同
+
+- Raft不是所有的节点都可以是Leader，只有日志最完整的节点才可以。
+- 日志必须是连续的。Multi-Paxos 不要求日志是连续的
+
+### 小结
+
+Raft算法选举领导者的几个原则：（如何保证任何时候只有1个领导者，如何减少选举失败?）
+
+- 任期
+- 领导者心跳消息
+- 随机选举超时
+- 先来先服务
+- 大多数选票原则
+
+
+
+### 2 复制日志
+
+共识算法的实现一般是基于复制状态机（Replicated state machines）(**相同的初识状态 + 相同的输入 = 相同的结束状态**。)
+
+- 在raft中，leader将客户端请求（command）封装到一个个log entry，将这些log entries复制（replicate）到所有follower节点，然后大家按相同顺序应用（apply）log entry中的command，则状态肯定是一致的。
+
+  <img src="0JavaSummary.assets/1089769-20181216202234422-28123572-6070133.png" alt="img" style="zoom:67%;" />
+
+
+
+<img src="0分布式协议.assets/image-20210706165109245-1625561470718.png" alt="image-20210706165109245" style="zoom:50%;" />
+
+**如何复制日志？优化 Basic Paxos 执行**
+
+- 领导者进入第一阶段，通过日志复制（AppendEntries）RPC 消息，将日志项复制到集群其他节点上。
+- 如果领导者接收到大多数的“复制成功”响应后，它将日志项提交到它的状态机，并返回成功给客户端。如果领导者没有接收到大多数的“复制成功”响应，那么就返回错误给客户端。
+
+> 领导者提交了自己的日志项，为什么没有通知跟随者提交日志项呢?
+>
+> 这是Raft的一个优化，额外通过其他时候的日志复制 RPC 消息或心跳消息告知。因为这些消息里面包含了当前最大的，将会被提交的日志项索引值。
+>
+> - 好处：降低了一半的消息延迟
+
+
+
+#### **如何复制日志的具体流程？**
+
+![image-20210706170810690](0JavaSummary.assets/image-20210706170810690-1625562491796-6070133.png)
+
+- 接收到客户端请求后，领导者基于客户端请求中的指令，创建一个新日志项，并附加到本地日志中。
+
+- 领导者通过日志复制 RPC，将新的日志项复制到其他的服务器。
+
+- 当领导者将日志项，成功复制到大多数的服务器上的时候，领导者会将这条日志项提交到它的状态机中。
+
+- 领导者将执行的结果返回给客户端。
+
+- 当跟随者接收到心跳信息，或者新的日志复制 RPC 消息后，如果跟随者发现领导者已经提交了某条日志项，而它还没提交，那么跟随者就将这条日志项提交到本地的状态机中。
+
+#### 如何实现日志的一致？
+
+源于：进程崩溃、服务器宕机等问题
+
+思路：领导者通过强制跟随者直接复制自己的日志项，处理不一致日志。具体有 2 个步骤。
+
+- 领导者通过日志复制 RPC 的一致性检查，找到跟随者节点上，与自己相同日志项的最大索引值。也就是说，这个索引值之前的日志，领导者和跟随者是一致的，之后的日志是不一致的了。
+- 领导者强制跟随者更新覆盖的不一致日志项，实现日志的一致。
+
+![image-20210706171730627](0分布式协议.assets/image-20210706171730627-1625563051916.png)
+
+
+
+- 领导者发送当前最新日志项到跟随者（7,4)
+
+- 跟随者在它的日志中，找不到(7,4) 的日志项，跟随者返回失败信息。
+
+- 领导者会递减日志项，并发送新的日志项（6,3）
+
+- 跟随者在它的日志中，找到了 （6,3），返回成功。
+
+- 领导者通过日志复制 RPC，复制并更新覆盖跟随者。（实现了日志一致性）
+
+> 如何解决leader频繁切换导致的日志可能被回滚的问题？
+>
+> 某个leader选举成功之后，不会直接提交前任leader时期的日志，而是通过提交当前任期的日志的时候“顺手”把之前的日志也提交了，具体怎么实现了，在log matching部分有详细介绍。那么问题来了，如果leader被选举后没有收到客户端的请求呢，论文中有提到，在任期开始的时候发立即尝试复制、提交一条空的log
+
+### 小结
+
+- 在 Raft 中，副本数据是以日志的形式存在的，指令表示用户指定的数据。
+- Multi-Paxos 不要求日志是连续的，但在 Raft 中日志必须是连续的。日志完整性最高的节点才能当选领导者。
+- Raft 是通过以领导者的日志为准，来实现日志的一致的。
+
+### 3 成员变更
+
+背景：节点上下线，原有3台节点，现在新入2台，如何保证集群不会分裂，出现2个领导者。
+
+**最常用的方法：单节点变更**。
+
+- 有什么办法能突破 Raft 集群的写性能瓶颈呢？参考Kafka的分区和ES的主分片副本分片这种机制
+
+
+
+**网络分区，怎么保证读写数据的正确性？**
+
+<img src="0JavaSummary.assets/1089769-20181216202652306-2050900084-6070133.png" alt="img" style="zoom:50%;" />
+
+在系统中貌似出现了两个leader：term 1的Node B， term 2的Node E, Node B的term更旧，但由于无法与Majority节点通信，NodeB仍然会认为自己是leader。
+
+在这样的情况下，我们来考虑读写。
+
+- 写请求发送到了NodeB，NodeB无法将log entry 复制到majority节点，因此不会告诉客户端写入成功，这就不会有问题。
+- 读请求，stale leader可能返回stale data，比如在read-after-write的一致性要求下，客户端写入到了term2任期的leader Node E，但读请求发送到了Node B。如果要保证不返回stale data，leader需要check自己是否过时了，办法就是与大多数节点通信一次，这个可能会出现效率问题。另一种方式是使用lease，但这就会依赖物理时钟。（TODO）
+- 从raft的论文中可以看到，leader转换成follower的条件是收到来自更高term的消息，如果网络分割一直持续，那么stale leader就会一直存在。而在raft的一些实现或者raft-like协议中，leader如果收不到majority节点的消息，那么可以自己step down，自行转换到follower状态。
+
+### leader crash
+
+leader在请求过程中，任一时候crash，raft是如何容错的，保障数据一致性的？
+
+当leader crash的时候，事情就会变得复杂。在[这篇文章](http://www.cnblogs.com/mindwind/p/5231986.html)中，作者就给出了一个更新请求的流程图。
+
+<img src="0分布式协议.assets/image-20210710233035986.png" alt="image-20210710233035986" style="zoom:50%;" />
+
+记录一下重要的：
+
+- 3.1阶段：数据到达 Leader 节点，成功复制到 Follower 所有节点，但还未向 Leader 响应接收
+  - 这个阶段 Leader 挂掉，虽然数据在 Follower 节点处于未提交状态（Uncommitted）但保持一致，重新选出 Leader 后可完成数据提交，此时 Client 由于不知到底提交成功没有，可重试提交。针对这种情况 Raft 要求 RPC 请求实现幂等性，也就是要实现内部去重机制。
+- 3.1 阶段：数据到达 Leader 节点，成功复制到 Follower 部分节点，但还未向 Leader 响应接收
+  - 这个阶段 Leader 挂掉，数据在 Follower 节点处于未提交状态（Uncommitted）且不一致，Raft 协议要求投票只能投给拥有最新数据的节点。所以拥有最新数据的节点会被选为 Leader 再强制同步数据到 Follower，数据不会丢失并最终一致。
+- 网络分区导致的脑裂情况，出现双 Leader
+  网络分区将原先的 Leader 节点和 Follower 节点分隔开，Follower 收不到 Leader 的心跳将发起选举产生新的 Leader。这时就产生了双 Leader，原先的 Leader 独自在一个区，向它提交数据不可能复制到多数节点所以永远提交不成功。向新的 Leader 提交数据可以提交成功，网络恢复后旧的 Leader 发现集群中有更新任期（Term）的新 Leader 则自动降级为 Follower 并从新 Leader 处同步数据达成集群数据一致。
+
+- 领导者节点作为唯一提议者。
+
+
 
 ### ZAB（ZooKeeper Atomic Broadcast）
 
@@ -659,7 +971,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   2. 只要大多数（quorum）nodes 已启动，事务就会被复制
   3. 若 node 故障但随后又重启，它应能追上故障期间已经复制完成的事务
 
-### 具体实现
+#### 具体实现
 
 - 消息广播复制(2PC的变种)
   - 客户端读取任何一个 Zookeeper 节点
@@ -705,7 +1017,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
     - 当 leader 收到 quorum 的确认，它就分发提交（commit）消息至 quorum，此时 leader 就宣称确立，不再是潜在状态（leader）
 
   ![img](0JavaSummary.assets/120365.png)
-  
+
 
   - Phase 3 广播
     - 如没有崩溃发生，节点永久地停留在这个阶段，一旦客户端发起一个写请求，节点就执行事务广播（leader）
@@ -728,6 +1040,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 - CP系统，分析A:极端情况下，不能保证每次服务请求的可用性；leader选举时集群都是不可用。
 
 - 三种角色：Leader、Follower、Observer，Leader 提供读写，Follower 和 Observer 只提供读服务，Observer 不参与 Leader 选举过程，也不参与写操作的“过半写成功”策略，因此 Observer 可以不影响写性能的情况下提升集群读性能
+
   - leader职责是接受所有客户端请求，协调内部各个服务器。 
   - follower职责是处理客户端非事务请求，参与Proposal的投票和leader选举。
   - observer职责是处理客户端非事务请求，不参与投票。（为什么这么设计？）
@@ -755,9 +1068,9 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   - 当客户端与服务端网络断开，客户端会自动反复重连直到连上集群中的一台机器，如果在会话超时时间内重新连上，则状态改为 *CONNECTED*（CONNECTION_LOSS），如果超过超时时间才连上，则为 *EXPIRED*（SESSION_EXPIRED）
 
 - **ZAB Leader选举(面试重点：ZAB的领导者选举过程 TODO)**
-  
+
 - <img src="0JavaSummary.assets/image-20210630231038099.png" alt="image-20210630231038099" style="zoom:50%;" />
-  
+
   - 服务器状态
     - LOOKING：Leader 选举阶段
     - FOLLOWING：跟随者状态
@@ -796,8 +1109,9 @@ StrongReference、WeakReference、SoftReference、PhantomReference
       - 如果已经确定过半服务器认可了自己的投票（可能是更新后的投票），则投票终止；否则继续接受其他服务器的投票
     - 更新服务器状态
       - 投票终止后，服务器开始更新自身状态. 若过半票投给了自己，则将自己的服务器状态更新为LEADING，否则将自己的状态更新为 FOLLOWING
-  
+
 - 数据同步
+
   - 几个定义
     - peerLastZXID：learner 服务器最后处理的 ZXID
     - miniCommittedLog：leader outstanding proposals queue committedLog 中最小的 ZXID
