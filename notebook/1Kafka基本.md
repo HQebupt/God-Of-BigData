@@ -3,6 +3,10 @@
 ### 1  kafka
 
 消息引擎，从0.11开始，又是分布式流处理平台。
+- 缓冲和削峰
+- 解耦和扩展性
+- 冗余
+- 异步通信
 
 ### 2 规划集群
 
@@ -427,6 +431,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 2. ISR(In Sync Replica): 保持与Leader同步的副本。判断条件是什么？只有1个，看lag落后的时间，10s。更细致地讲，Broker启动的时候，会有2个线程做什么？
 
    1. ACK=all，leader收到数据后，只要ISR的follower完成数据的同步之后，就回复ack给客户端。
+   2. ACK=all情況下，指定最小的ISR集合大小，只有当ISR的大小大于最小值，分区才能接受写入操作。（**一致性和可用性的折衷，交给用户来决定**）
 
 3. 如果Leader挂了，就会引发Leader Select，领导者选举。调用配置的**分区选择算法**选择分区的leader
 
@@ -481,7 +486,7 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 <img src="1Kafka基本.assets/image-20210709113206365.png" alt="image-20210709113206365" style="zoom:50%;" />
 
 1. HW和 log endof offset 是什么？有什么作用？HW是以提交的位移最大值+1， Log End Offset是当前最新的消息位置。
-   1. HW以下的消息是可见的，就是可以消费的
+   1. HW以下的消息是消费者可见的，也是ISR中最小的LEO。
    2. HW和LEO帮助Kafka完成副本同步
 
 2. Follower副本是如何同步的，或者Follower和Leader副本的HW和LEO是如何被更新的？
