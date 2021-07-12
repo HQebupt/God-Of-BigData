@@ -1,4 +1,4 @@
-### 0 jdk版本重要特性
+## 0 jdk版本重要特性
 
 - jdk7
   - 增加fork/join并发架构
@@ -357,9 +357,144 @@ StrongReference、WeakReference、SoftReference、PhantomReference
     PhantomReference pr = new PhantomReference(str, queue);
 ```
 
+## 3 JVM
+
+<img src="0JavaSummary.assets/image-20210712082721625.png" alt="image-20210712082721625" style="zoom: 33%;" />
+
+### 结构、回收算法
+
+- 基本结构：程序计数器、JVM 栈、native 栈、堆、运行时常量池
+- 分区：垃圾收集器把堆分为新生代、老年代、永久代，1.8 版本后引入了 MetaSpace 替换永久代，本地内存。
+- 直接内存: NIO，`DirectByteBuffer分配
+- 基本回收算法：标记清除，标记整理，复制
+
+- 对象分配策略
+  - 优先分配在新生代
+  - 大对象直接老年代(-XX:PretenureSizeThreshold)
+  - 长时间存活对象进入老年代(- XX:MaxTenuringThreshold)
+  - 若 Survivor 中相同年龄的对象大小和 > Survivor 空间的一半，则年龄大于等于该值的对象直接进入老年代
+  - 空间分配担保策略
+    - YGC 前 JVM 检查老年代的连续空间是否大于新生代所有对象总和
+    - 若上述为否且 HandlePromotionFailure 为 true ，则检查老年代连续空间是否大于每次晋升对象的平均大小
+    - 若上述为否，或 HandlePromotionFailure 为 false ，则触发 FullGC
+
+- GC Roots和对象路由
+  - GC Roots 包括：本地变量、静态变量、JNI 引用等
+  - 垃圾收集器内有一组成为 OopMap 的数据结构存储了所有对象的地址
+- SafePoint
+  - 以“是否具有让程序进入长时间运行的特征”作为标准，如方法跳转、异常跳转
+  - GC 过程中用户线程的中断方式是主动式中断，具体行为是用户线程不断轮训收集器的中断标志，如果为真则就近的安全点中断自身
+  - 对于已挂起的用户线程，其在挂起之前，先将自身标记为“已进入安全域”（Safe Region），解决用户线程在 Sleep、Blocked 时无法响应 JVM 中断请求而导致 JVM 等待的问题
+
+### 类加载
+
+- 类的生命周期
+
+  <img src="0JavaSummary.assets/image-20210712083625754.png" alt="image-20210712083625754" style="zoom: 33%;" />
+
+- 类的加载顺序
+
+  - 静态变量 > 静态初始化块 > 成员变量 > 初始化块 > 构造器
+
+- 双亲委派模型：
+
+  - 委托给父类加载器加载，防治内存中同一个对象出现多次。
+  - <img src="0JavaSummary.assets/image-20210712084136084.png" alt="image-20210712084136084" style="zoom: 50%;" />
+  - BootStrap ClassLoader，加载/JAVA_HOME/lib下的类库，或-Xbootclasspath指定的路径且能被JVM识别的类库
+  - Extension ClassLoader，加载/JAVA_HOME/lib/ext下的类库，或java.ext.dirs系统变量指定路径下的类库
+  - Application ClassLoader，加载用户类路径上（classpath）的指定类库
+  - 类加载器的作用：判断是类是否相等
+
+### Card Table
+
+- 解决问题：分代收集中跨代引用，引入卡表后只需扫描对应的 Dirty Card
+- CMS  Remember Set ，实现就是 Card Table
+- ![img](0JavaSummary.assets/120188.png)
+
+- Card Page
+  - 将堆空间划分为2次幂大小的卡页，512字节
+  - 卡表：标记每个 Card Page 的状态
+- Write Barrier
+  - 对象引用发生写操作，写屏障将标记 Card Page 标记位 dirty。（CMS和G1）
+
+- Remember Set概念
+  - Card Table 是 remember set 的一种具体实现（字长精度、对象精度、卡精度）
+
+### 三色标记法
+
+- 解决问题：标记清除算法，存在长时间暂停。（实时性要求高的系统不能用）
+
+- 异步执行，以极少的中断时间代价来进行整个 GC。
+
+- 三色标记
+
+  - 黑色：根对象，或者该对象与它的子对象都被扫描
+  - 灰色：对象本身被扫描，但还没扫描完该对象中的子对象
+  - 白色：未被扫描对象，扫描完成所有对象之后，最终为白色的为不可达对象，即垃圾对象
+
+- 标记过程
+
+  * 根对象为黑，其子对象为灰
+  * 遍历灰对象，将白的变灰，灰的变黑
+  * 遍历完，只剩下黑和白
+
+- 存在的问题
+
+  - 标记过程不是原子性的，因此对象引用关系变化会导致多标漏标问题（细节TODO）
+
+    ![image-20210712092834113](0JavaSummary.assets/image-20210712092834113.png)
+
+  - 漏标问题：当A被置为黑色（完成标记），B被置为灰色等待扫描子对象时，子对象C的引用关系由B->C变成A->C，就会导致C漏标
+
+* 解决：
+  * Incremental update（CMS）
+    - 简要：只要在 write barrier 里发现要有一个白对象的引用被赋值到一个黑对象的字段里，那就把这个白对象变成灰色的（例如说标记并压到 marking stack 上，或者是记录在类似 mod-union table 里）
+    - post-write barrier
+  * SATB（G1）
+    - 简要原理：把 marking 开始时的逻辑快照里所有的活对象都看作活的，具体做法是在 write barrier 里把所有旧的引用所指向的对象都变成非白的（已经黑灰就不用管，还是白的就变成灰的）
+    - 解决的问题：CMS 重新标记阶段暂停时间过长的风险
+    - 通过 TAMS 指针识别并发 GC 过程中新分配的对象，新分配的都认为的活的对象（隐式标记）
+    - <img src="0JavaSummary.assets/120150.png" alt="img" style="zoom:50%;" />
+      - 第 n 轮并发标记开始，Region 当前的 top 指针赋值给 next TAMS，在并发标记标记期间，新对象都在[next TAMS, top]之间分配，SATB 确保这部分的对象都会被标记，默认都是存活的
+      - 当并发标记结束时，next TAMS 所在的地址赋值给 previous TAMS，SATB 给 [bottom, previous TAMS] 之间的对象创建一个快照 Bitmap，垃圾对象通过快照被识别出来
+  * pre-write barrier
+    - 拦截对象引用修改写入操作，通 过G1SATBCardTableModRefBS::enqueue(oop pre_val) 把原引用保存到 satb mark queue 中，最终这部分会被合并的 Snapshot 中
+
+### 收集器原理机制
+
+#### Concurrent Mark Sweep
+
+- 几个概念、数据结构
+
+  - DirtyCard
+  - Mod-Union Table（具体实现是Bitmap，标识新生代晋升、直接在老年代分配、老年代引用关系变更的对象）
+  - RememberSet，记录老年代哪个Card中的对象引用了新生代（O -> Y），解决新生代标记的问题
+  - PromotionFailed、Concurrent Mode Failure
+
+- 回收步骤
+
+  ![image-20210712093543873](0JavaSummary.assets/image-20210712093543873.png)
+
+  - CMS-initial-mark，初始标记 GC-Roots 可达对象：遍历新生代对象，标记可达的老年代对象；默认单线程，可通过配置调整为多线程（-XX:+CMSParallelInitialMarkEnabled）
+  - CMS-concurrent-mark，遍历 initial-mark 标记的对象，递归标记这些对象可达的对象，针对老年代引用关系变更记录 Dirty Card，新生代对象晋升记录 Mod-Union Card（若某个CardTable中的Card中记录为1，YoungGC 时扫描该 Card 发现没有持有新生代的引用，那么该 Card 清除，并将 Mod-Union Card 中对应元素置为 1）
+    - CMS-concurrent-clean，是 optional 步骤，默认开启；新生代对象新引用老年代未标记对象时，需标记老年代对象；扫描 Dirty Card，处理相应的对象变更
+    - CMS-concurrent-abortable-preclean，同样是 Optional 步骤，若 Eden 区 CMSScheduleRemarkEdenSizeThreshold=2M，则略过此步骤；否则循环执行 concurrent-mark ，直到 1）达到设置的循环次数（默认0），2）达到执行时间限制（默认5s），Eden 区内存使用率达到阈值 CMSScheduleRemarkEdenPenetration（默认50%）；可通过 CMSScavengeBeforeRemark 配置每次 abortable-preclean 都触发一次 Young GC
+  - CMS-final-remark，停止用户线程，遍历新生代对象重新标记，根据老年代GC Roots重新标记，遍历老年代 Dirty Card 重新标记（大部分 Dirty Card 已经在 clean 阶段处理过）
+  - CMS-concurrent-sweep，回收不可达对象，三种情况下会触发压缩：
+    - UseCMSCompactAtFullCollection (默认true)和CMSFullGCsBeforeCompaction(默认0)时每次GC都进行压缩（其实是整理）
+    - 执行了System.gc()
+    - 新生代分配担保失败
+  - CMS-concurrent-reset，重置CMS内部的数据结构，进入下一个CMS生命周期
+
+- 存在的问题
+
+  - 长时间运行内存碎片化
+  - final remark存在风险，停顿时间可能过长
+  - 大内存性能差
 
 
-###  4分布式原理和zookeeper
+
+## 4分布式原理和zookeeper
 
 - CAP
   - 一致性、可用性（**有限时间**内**返回结果**）、分区容错性（部分子网络故障不会导致整个系统不可用）
@@ -375,7 +510,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 - BASE
   - Basically Available（响应时间增加、功能部分损失如降级）、Soft state（允许不同节点数据副本之间进行数据带来的延迟）、Eventually consistent（数据经过一段时间同步后最终能到达一个一致的状态）
 
-#### 2PC
+### 2PC
 
 - 阶段1 提交事务请求（投票阶段）：
   - 事务询问（proposer）
@@ -392,9 +527,9 @@ StrongReference、WeakReference、SoftReference、PhantomReference
     2. 事务rollback（acceptor）
     3. 反馈事务rollback结果（acceptor）
     4. 中断事务（proposer）
-- 存在的问题：同步阻塞、单点问题、脑裂（致使数据不一致）、过于保守（少量节点失败导致整体提交失败）（TODO，实际实现一下）
+- 存在的问题：同步阻塞、单点问题、脑裂（致使数据不一致）、过于保守（少量节点失败导致整体提交失败）
 
-#### 3PC
+### 3PC
 
 - 改进2PC的提交事务请求阶段，变成三个阶段：
 
@@ -426,7 +561,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
   
 
-#### Paxos (consensus, not consistency) TODO,而且没总结完
+### Paxos (consensus, not consistency) TODO,而且没总结完
 
 - 三个角色：Proposer、Acceptor、Learner，具体实现中，一个进程可能充当不止一种角色
 
@@ -474,9 +609,9 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
 ![img](0JavaSummary.assets/120555.jpeg)
 
-#### Raft Consensus Algorithm（TODO未总结）
+### Raft Consensus Algorithm（TODO未总结）
 
-#### ZAB（ZooKeeper Atomic Broadcast）
+### ZAB（ZooKeeper Atomic Broadcast）
 
 - 定义
   - leader、followers：Zookeeper 集群中，一个节点充当 leader 角色，其余皆为 follower. 
@@ -496,9 +631,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   2. 只要大多数（quorum）nodes 已启动，事务就会被复制
   3. 若 node 故障但随后又重启，它应能追上故障期间已经复制完成的事务
 
-
-
-##### 具体实现有2种模式
+### 具体实现
 
 - 消息广播复制(2PC的变种)
   - 客户端读取任何一个 Zookeeper 节点
@@ -558,7 +691,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   - ZXID 低 32 位为自增计数，高 32 位代表了 Leader 周期 epoch 编号
   - 当选举出一个新的 Leader 时，就会从这个 leader 本地日志中去的最大事务提议的 ZXID，解析出对应的 epoch 值再自加 1，以此作为新的 ZXID 的高 32 位，低 32 位则从 0 开始
 
-#### Zookeeper
+## 4 Zookeeper
 
 * 分布式协调服务框架，主要依靠文件系统和监听通知机制。
 
