@@ -1161,12 +1161,58 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 - Consumer Group
   - 官网，可扩展、容错性的消费者机制
   - 由多个Consumer实例组成。订阅若干个主题，实现共同消费。某个实例挂掉，触发rebalance继续消费。
-
 - controller、leader、follower
   - controller负责全局meta信息维护，管理Broker上下线、topic管理、管理分区副本分配、leader选举、管理所有副本状态机和分区状态机；通过zookeeper实现选举
   - leader和follower是针对partition而言，当leader宕机，controller将从ISR中使用分区选择算法选出新的leader
 
-- 幂等性Producer是如何实现的？
+### Producer
+
+* TCP连接
+
+- 幂等性Producer是如何实现的？0.11，at least once + 幂等 = exactly once
+
+  - 单分区不重复，单会话不重复。(重启，丢失缓存)
+
+  - 解决：单会话ACK 超时导致重复
+    - Broker缓存消息，根据PID和SequenceNumber判重
+    - ProducerID：唯一的ProducerID，标识client
+    - SequenceNumber：TopicPartition级别，每条消息带着，Broker判重。
+
+  <img src="0JavaSummary.assets/image-20210713143421514.png" alt="image-20210713143421514" style="zoom:50%;" />
+
+  * 申请PID
+    * Client：InitProducerIdRequest 发送给连接数最少的Broker
+    * Broker: TransactionCoordinator的ProducerIdManager生产唯一id，TransactionCoordinator负责与Producer通信，更新message的事物状态。
+    * PID 申请是向 ZooKeeper 申请，类似于CompareAndSwap的方式，来写入PID，写入成功，就申请成功；失败就重试。
+
+- Producer请求过程
+
+<img src="0JavaSummary.assets/kafka-idemoptent.png" alt="Producer 幂等性时处理流程" style="zoom: 50%;" />
+
+1. KafkaProducer 的 `send()` 将数据添加到 RecordAccumulator
+2. Producer 发送线程 Sender申请PID,`sendProducerData()` 方法发送数据
+3. 进入Broker端逻辑，判重在Broker端，batchMetadata 缓存batch ，5（社区测试）
+
+- 什么情况不能保证补充不丢不重
+  - 有 topic-partition 的 batch 重试多次失败，超时被移除，这sequence number 无法连续，需要重置ProducerID，Broker端缓存被清空。
+
+* 如何实现写消息一定有序
+  * Producer设置，影响Broker，
+  * MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION =1，有序、性能
+  * 当出现重试时，max-in-flight-request 可以动态减少到 1，在正常情况下还是按 5 （CA取舍)
+
+
+
+- 事务性Producer：
+
+  * 多分区不重复。
+
+  * TransactionManager 实例，它的作用有以下几个部分：
+    1. 记录本地的事务状态（事务性时必须）；
+    2. 记录一些状态信息以保证幂等性，比如：每个 topic-partition 对应的下一个 sequence numbers 和 last acked batch（最近一个已经确认的 batch）的最大的 sequence number 等；
+    3. 记录 ProducerIdAndEpoch 信息（PID 信息）。
+
+
 
 ## 杂货
 

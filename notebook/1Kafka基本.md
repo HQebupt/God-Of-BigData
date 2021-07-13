@@ -218,16 +218,34 @@ Producer从创建到真正写数据，会发起下面几次TCP连接请求？
 
 ### 14 幂等Producer
 
-幂等性Producer是0.11引入的，如何生成？
+- 幂等性Producer是如何实现的？0.11，at least once + 幂等 = exactly once
 
-- 幂等性Producer：可以保证单分区的数据不重复，或者是单会话的数据不重复。
-- 事务性Producer：可以保证多个分区的数据不重复。
+  - 单分区不重复，单会话不重复。(重启，丢失缓存)
 
-如果要Consumer读取事务性Producer的数据，需要修改一下：`isolation.level=read_uncommitted  或者read_committed`
+  - 解决：单会话ACK 超时导致重复
+    - Broker缓存消息，根据PID和SequenceNumber判重
+    - ProducerID：唯一的ProducerID，标识client
+    - SequenceNumber：TopicPartition级别，每条消息带着，Broker判重。
 
-> 左耳朵说过：跨多个服务的事务，一般都是2PC及其变种。Kafka事务Producer也是这样。
->
-> TODO: 这一章节，原理没有讲。
+  <img src="1Kafka基本.assets/image-20210713143421514.png" alt="image-20210713143421514" style="zoom:50%;" />
+
+  * 申请PID
+    * InitProducerIdRequest 发送给连接数最少的Broker
+    * TransactionCoordinator的ProducerIdManager生产唯一id，TransactionCoordinator负责与Producer通信，更新message的事物状态。
+    * PID 申请是向 ZooKeeper 申请，类似于CompareAndSwap的方式，来写入PID，写入成功，就申请成功；失败就重试。
+
+关于幂等性的思考，要解决下面的问题：
+
+1. 系统需要有能力鉴别一条数据到底是不是重复的数据？常用的手段是通过 **唯一键/唯一 id** 来判断
+2. 唯一键应该选择什么粒度？分布式存储系统，全局唯一键？分区唯一主键？Kafka 在分区的维度去做，重复数据的判断让 partition 的 leader 去判断处理
+3. 分区粒度实现唯一键有问题？当一个 Partition 有来自多个 producer写入的情况。Kafka使用 **producer+ partition** 粒度，producer是独立的。
+
+* 当 MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION 配置大于1时，是否保证有序
+  * Server 端验证 batch 的 sequence number 值，不连续时，直接返回异常；
+  * Client 端请求重试时，batch 在 reenqueue 时会根据 sequence number 值放到合适的位置（有序保证之一）；
+  * Sender 线程发送时，在遍历 queue 中的 batch 时，会检查这个 batch 是否是重试的 batch，如果是的话，只有这个 batch 是最旧的那个需要重试的 batch，才允许发送，否则本次发送跳过这个 Topic-Partition 数据的发送等待下次发送。
+
+
 
 ### 15 ConsumerGroup
 
