@@ -1158,16 +1158,21 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ### 概念
 
-- Consumer Group
-  - 官网，可扩展、容错性的消费者机制
-  - 由多个Consumer实例组成。订阅若干个主题，实现共同消费。某个实例挂掉，触发rebalance继续消费。
+- LEO、LSO、AR、ISR、HW
+  - LEO:Log End Offset。日志末端位移
+  - LSO:Log Stable Offset，事务
+  - AR：Assigned Replicas。所有副本集合
+  - **ISR**:In-Sync Replicas，与 Leader 同步的副本
+    - 副本是否 ISR？replica.lag(10s)
+  - **HW**：高水位值（High watermark）,消费者可见，ISR中最小的LEO。
+  - 
 - controller、leader、follower
   - controller负责全局meta信息维护，管理Broker上下线、topic管理、管理分区副本分配、leader选举、管理所有副本状态机和分区状态机；通过zookeeper实现选举
   - leader和follower是针对partition而言，当leader宕机，controller将从ISR中使用分区选择算法选出新的leader
 
 ### Producer
 
-* TCP连接
+* TCP连接是如何建立的
 
 - 幂等性Producer是如何实现的？0.11，at least once + 幂等 = exactly once
 
@@ -1212,7 +1217,55 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
     2. 记录一些状态信息以保证幂等性，比如：每个 topic-partition 对应的下一个 sequence numbers 和 last acked batch（最近一个已经确认的 batch）的最大的 sequence number 等；
     3. 记录 ProducerIdAndEpoch 信息（PID 信息）。
 
+### Consumer
 
+- 是什么
+  - 官网，可扩展、容错性的消费者机制
+  - 多个Consumer实例。订阅主题，共同消费。某个挂掉，rebalance。
+- offset
+  - 每个消息在partition的唯一ID
+- __consumer_offsets
+  - 注册消费者以及保存位移值，GroupCoordinator管理、读写
+
+### Controller
+
+- 做什么
+  - Topic、Partition管理，Prefer 领导者选举：LeaderAndIsrRequest
+    - Broker管理，元数据管理：UpdateMetadataRequest
+- 是什么
+  - 给 Broker 发送 3 类请求，即 LeaderAndIsrRequest、StopReplicaRequest 和 UpdateMetadataRequest，
+- 脑裂，ActiveControllerCount>1，僵住
+  - 背景：Controller FullGC太长，网络故障
+  - 影响Topic的创建、修改、删除操作的**信息同步**。不影响现有topic的读写。
+  - 解决：新的controller在zk生成新的controller epoch，并同步给broker，旧controller的指令，broker自动忽略。
+
+### Zookeeper
+
+- 作用
+  - 元数据管理、成员管理、Controller 选举。（现在2.8已经移除zk）
+  - 
+
+### 副本
+
+- Leader 和 Follower 区别
+  - Leader读写
+  - Follower PULL同步数据（2.4 ，可读）
+-  Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一致性
+  - 高水位机制（无法保证 Leader 连续变更场景下的数据一致性）
+  - Leader Epoch 机制
+
+
+
+### 实际操作
+
+- 监控 Kafka
+  - Kafka Manager、Kafka Monitor、JMX 监控、JMXTool
+- Broker 的 Heap Size 如何设置
+  - 稳定后，手动触发(jmap)Full GC，存活对象的 1.5~2 倍。 6GB。
+- 估算 Kafka 集群的机器数量？
+  - 带宽
+  - 磁盘
+- 
 
 ## 杂货
 
