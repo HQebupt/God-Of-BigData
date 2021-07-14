@@ -1253,6 +1253,20 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 -  Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一致性
   - 高水位机制（无法保证 Leader 连续变更场景下的数据一致性）
   - Leader Epoch 机制
+- Leader 选举
+  - 思想：从 AR 中挑选首个在 ISR 中的副本，作为新 Leader
+  - 一种场景，一种选举策略。
+  - OfflinePartition: 分区上下线
+  - ReassignPartition：手动kafka-reassign-partitions 
+  - PreferredReplicaPartition ：手动kafka-preferred-replica-election
+  - ControlledShutdownPartition ：Broker 正常关闭
+
+### 原理
+
+- Zero Copy
+  - 基于 mmap 的索引
+  - 日志文件读写TransportLayer， FileChannel 的 transferTo方法，操作系统的sendfile 
+    - 
 
 
 
@@ -1308,3 +1322,8 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 1. 如果需要聚合（aggregate），选择histograms。
 2. 如果比较清楚要观测的指标的范围和分布情况，选择histograms。如果需要精确的分为数选择summary。
+
+### 小米
+
+- 元数据治理：元数据管理平台包括：元数据采集服务，应用开发支持服务，元数据访问服务、元数据管理服务和元数据分析服务。
+- 有利于统一数据口径、标明数据方位、分析数据关系、管理数据变更，为企业级的数据治理提供支持，是企业实现数据自服务、推动企业数据化运营的可行路线。
