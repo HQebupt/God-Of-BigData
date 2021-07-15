@@ -507,6 +507,11 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
 
 
+- 对象划分的规则
+  - 小于一半Region, Eden
+  - 大于一半, Humongous
+  - 超过一个Region, Humongous连续Region
+
 **另外一种源码阐述**
 
 - 每次回收都只回收 CSet（Collection Set）中的 Region ，YoungGC 即 CSet 中只包含 young region 、 MixedGC 则是 Cset 中包含 young region 和 old region
