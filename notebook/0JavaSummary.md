@@ -1165,20 +1165,31 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - **ISR**:In-Sync Replicas，与 Leader 同步的副本
     - 副本是否 ISR？replica.lag(10s)
   - **HW**：高水位值（High watermark）,消费者可见，ISR中最小的LEO。
-  - 
+  
 - controller、leader、follower
   - controller负责全局meta信息维护，管理Broker上下线、topic管理、管理分区副本分配、leader选举、管理所有副本状态机和分区状态机；通过zookeeper实现选举
-  - leader和follower是针对partition而言，当leader宕机，controller将从ISR中使用分区选择算法选出新的leader
+  - leader和follower是partition级别，leader提供读写，follower同步
+
+### 无消息丢失
+
+1. 不要使用 producer.send(msg)，而要使用 producer.send(msg, callback)。记住，一定要使用带有回调通知的 send 方法。
+2. 设置 acks = all。acks 是 Producer 的一个参数，代表了你对“已提交”消息的定义。如果设置成 all，则表明所有副本 Broker 都要接收到消息，该消息才算是“已提交”。这是最高等级的“已提交”定义。
+3. 设置 retries 为一个较大的值。这里的 retries 同样是 Producer 的参数，对应前面提到的 Producer 自动重试。当出现网络的瞬时抖动时，消息发送可能会失败，此时配置了 retries > 0 的 Producer 能够自动重试消息发送，避免消息丢失。
+4. 设置 unclean.leader.election.enable = false。这是 Broker 端的参数，它控制的是哪些 Broker 有资格竞选分区的 Leader。如果一个 Broker 落后原先的 Leader 太多，那么它一旦成为新的 Leader，必然会造成消息的丢失。故一般都要将该参数设置成 false，即不允许这种情况的发生。
+5. 设置 replication.factor >= 3。这也是 Broker 端的参数。其实这里想表述的是，最好将消息多保存几份，毕竟目前防止消息丢失的主要机制就是冗余。
+6. 设置 min.insync.replicas > 1。这依然是 Broker 端参数，控制的是消息至少要被写入到多少个副本才算是“已提交”。设置成大于 1 可以提升消息持久性。在实际环境中千万不要使用默认值 1。
+7. 确保 replication.factor > min.insync.replicas。如果两者相等，那么只要有一个副本挂机，整个分区就无法正常工作了。我们不仅要改善消息的持久性，防止数据丢失，还要在不降低可用性的基础上完成。推荐设置成 replication.factor = min.insync.replicas + 1。
+8. 确保消息消费完成再提交。Consumer 端有个参数 enable.auto.commit，最好把它设置成 false，并采用手动提交位移的方式。就像前面说的，这对于单 Consumer 多线程处理的场景而言是至关重要的。
 
 ### Producer
 
 * TCP连接是如何建立的
 
-- 幂等性Producer是如何实现的？0.11，at least once + 幂等 = exactly once
+- 幂等性如何实现？0.11，at least once + 幂等 = exactly once
 
   - 单分区不重复，单会话不重复。(重启，丢失缓存)
 
-  - 解决：单会话ACK 超时导致重复
+  - **实现**：解决单会话ACK 超时导致重复
     - Broker缓存消息，根据PID和SequenceNumber判重
     - ProducerID：唯一的ProducerID，标识client
     - SequenceNumber：TopicPartition级别，每条消息带着，Broker判重。
@@ -1226,18 +1237,97 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - 每个消息在partition的唯一ID
 - __consumer_offsets
   - 注册消费者以及保存位移值，GroupCoordinator管理、读写
+- 采用单线程来获取消息
+  - 双线程
+    - 负责获取消息
+    - 心跳线程。规避因消息处理速度慢而下线，引发rebalance。
+  - 异步非阻塞，适合流式
+
+### Rebalance
+
+- 坏处
+  - Consumer 端 TPS
+  - 慢
+  - 无局部性原理
+- 原因
+  - Consumer数量
+  - 订阅Topic数量
+  - 订阅Topic Partition数
+- 策略，由Coordinator定
+  - 轮询
+  - StickyAssignor，粘性策略
+
+> Coordinator认为Consumer实例挂了？
+>
+> 1. 心跳，`session.timeout.ms=10s`
+> 2. 心跳时间间隔，`heartbeat.interval.ms`
+> 3. 拉取间隔，`max.poll.interval.ms=5分钟`（一次消费一批消息的时间如果超过5分钟，Consumer就会主动要求离开）
+> 4. Consumer端 GC 参数设置不合理
+
+针对这些1、2、3分别有哪些实战经验呢？
+
+1. 规避第1类，Consumer未能及时发送心跳，导致Consumer被踢出Group而引发。 
+
+   - `sesstion.timeout.ms = 6s`（尽快让不合格的Consumer，早日离开）
+   - `heartbeat.interval.ms=2s`（保证Consumer在dead之前，至少发送了3次心跳请求。）
+2. 规避第3类，消费时间过长，增大max.pool.interval.ms`。原则是给业务留时间。
+3. Consumer端是否频繁出现Full GC导致长时间的STW。
+
+* 如何确定Coordinator的broker
+  * `partitionId=Math.abs(groupId.hashCode() % offsetsTopicPartitionCount)`这个副本的leader
 
 ### Controller
 
 - 做什么
   - Topic、Partition管理，Prefer 领导者选举：LeaderAndIsrRequest
-    - Broker管理，元数据管理：UpdateMetadataRequest
+  - Broker管理，元数据管理：UpdateMetadataRequest
+  - StopReplicaRequest：使用场景：分区副本迁移和删除主题
+
 - 是什么
   - 给 Broker 发送 3 类请求，即 LeaderAndIsrRequest、StopReplicaRequest 和 UpdateMetadataRequest，
 - 脑裂，ActiveControllerCount>1，僵住
   - 背景：Controller FullGC太长，网络故障
   - 影响Topic的创建、修改、删除操作的**信息同步**。不影响现有topic的读写。
   - 解决：新的controller在zk生成新的controller epoch，并同步给broker，旧controller的指令，broker自动忽略。
+
+### Broker处理请求流程
+
+![image-20210702154239238](0JavaSummary.assets/image-20210702154239238-5211760.png)
+
+- Client发送请求给SocketServer
+- Acceptor收到请求，轮询的方式分配给Processor，创建TCP连接，放入到newConncetions队列
+- Processor处理请求，把请求放入到RequestQueue
+- KafkaRequestHandlerPool从请求队列中获取 Request 实例，然后交由 KafkaApis 的 handle 方法，执行真正的请求处理逻辑。
+- KafkaRequestHandler 线程调用RequestChannel的SendResponse方法，将 Response 放入 Processor 线程的 Response Queue中
+- 最后，Processor 线程发送 Response 给 Request 发送方
+
+这张图更加易懂化。
+
+
+<img src="0JavaSummary.assets/image-20210701092750874-5102873.png" alt="image-20210608215400269" style="zoom:80%;" />
+
+- 1：Clients 或其他 Broker 发送请求给 Acceptor 线程
+
+  - Acceptor 线程通过调用 accept 方法，创建对应的 SocketChannel，然后将该 Channel 实例传给 assignNewConnection 方法，等待 Processor 线程将该 Socket 连接 请求，放入到它维护的待处理连接队列中。后续 Processor 线程的 run 方法会不断地从该 队列中取出这些 Socket 连接请求，然后创建对应的 Socket 连接。
+  - assignNewConnection 方法的主要作用是，将这个新建的 SocketChannel 对象存入 Processors 线程的 newConnections 队列中。之后，Processor 线程会不断轮询这个队列 中的待处理 Channel，并向这些 Channel 注册基于 Java NIO 的 Selector，用于真正的请求获取和响应发送 I/O 操作。
+
+- 第 2 & 3 步：Processor 线程处理请求，并放入请求队列
+
+  - 一旦 Processor 线程成功地向 SocketChannel 注册了 Selector，Clients 端或其他 Broker 端发送的请求就能通过该 SocketChannel 被获取到，具体的方法是 Processor 的 processCompleteReceives
+  - Processor 线程处理请求，就是指它从底层 I/O 获取到发送数据，将其转换成 Request 对象实例，并最终添加到请求队列RequestQueue的过程。
+
+- 4 步：I/O 线程处理请求
+
+  - KafkaRequestHandler 线程循环地从请求队列中获取 Request 实例，然后交由 KafkaApis 的 handle 方法，执行真正的请求处理逻辑。
+
+- 5 步：KafkaRequestHandler 线程将 Response 放入 Processor 线 程的 Response 队列
+
+  - 这一步的工作由 KafkaApis 类完成。当然，这依然是由 KafkaRequestHandler 线程来完 成的。KafkaApis.scala 中有个 sendResponse 方法，将 Request 的处理结果 Response 发送出去。本质上，它就是调用了 RequestChannel 的 sendResponse 方法
+
+- 6 步：Processor 线程发送 Response 给 Request 发送方
+
+  - 最后一步是，Processor 线程取出 Response 队列中的 Response，返还给 Request 发送 方。具体代码位于 Processor 线程的 processNewResponses 方法
+  - 最底层的部分是 sendResponse 方法来执行 Response 发送。该方法底 层使用 Selector 实现真正的发送逻辑。
 
 ### Zookeeper
 
@@ -1250,9 +1340,11 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 - Leader 和 Follower 区别
   - Leader读写
   - Follower PULL同步数据（2.4 ，可读）
+  
 -  Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一致性
   - 高水位机制（无法保证 Leader 连续变更场景下的数据一致性）
   - Leader Epoch 机制
+  
 - Leader 选举
   - 思想：从 AR 中挑选首个在 ISR 中的副本，作为新 Leader
   - 一种场景，一种选举策略。
@@ -1260,15 +1352,41 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - ReassignPartition：手动kafka-reassign-partitions 
   - PreferredReplicaPartition ：手动kafka-preferred-replica-election
   - ControlledShutdownPartition ：Broker 正常关闭
+  
+- 同步的完整流程
+
+  - Follower 发送 FETCH 请求给 Leader
+  - Leader 读取消息，更新内存 Follower 副本的 LEO 值，更新为 FETCH 请求中的 fetchOffset 值。尝试更新HW值。
+  - Follower 接收响应，写日志，更新 LEO 和 HW 值。
+
+  > Leader 和 Follower 的 HW 值更新时机是不同的，Follower 的 HW 更新永远落后于 Leader 的 HW。这种时间上的错配是造成各种不一致的原因。
+
+
 
 ### 原理
 
 - Zero Copy
   - 基于 mmap 的索引
   - 日志文件读写TransportLayer， FileChannel 的 transferTo方法，操作系统的sendfile 
-    - 
+  - 压缩和解压缩会丧失zero-copy的特性么？会
+    - 写消息，解压缩校验
+    - 读消息。可以sendfile
 
+* 不支持读写分离
 
+  * 避免不一致性
+  * 场景不适用，分离适用读负载很大
+  * 同步机制，Follower存在落后Leader的时间窗口，若Follower可读，须容忍消息滞后
+
+### 调优
+
+ * 目标不同，结果不同。吞吐量、延时、持久性和可用性
+ * 优化 Kafka 的 TPS
+     * Producer 端：增加 batch.size、linger.ms，启用压缩，关闭重试等。
+     * Broker 端：增加 num.replica.fetchers，提升 Follower 同步 TPS，避免 Broker Full GC 等。
+     * Consumer：增加 fetch.min.bytes 等
+* 处理请求区分优先级
+  * 开启数据和控制类请求区分
 
 ### 实际操作
 
@@ -1323,7 +1441,29 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 1. 如果需要聚合（aggregate），选择histograms。
 2. 如果比较清楚要观测的指标的范围和分布情况，选择histograms。如果需要精确的分为数选择summary。
 
+### K8S
+
+![image-20210714172117556](0JavaSummary.assets/image-20210714172117556.png)
+
+- Master：集群的控制和管理
+  - ApiServer：提供集群管理的授权、访问控制、发现、认证等功能
+  - Scheduler：调度器，收集每个Worker资源的详细信息及运行情况，方便调度决策。
+  - Controller Manager：监视集群状态，Pod副本管理。
+- Worker：工作节点
+  - Kuberlet：管理Pod的生命周期
+  - Container Runtime：运行时环境，比如Docker
+  - kube-proxy：代理，转发Service的请求到Pod
+- Etcd：存储集群的元数据信息
+- 概念
+  - Pod：最小的调度单位
+  - ReplicaSet：管Pod
+  - Deployment：管理Pod、ReplicaSet
+  - Service：
+
 ### 小米
+
+
 
 - 元数据治理：元数据管理平台包括：元数据采集服务，应用开发支持服务，元数据访问服务、元数据管理服务和元数据分析服务。
 - 有利于统一数据口径、标明数据方位、分析数据关系、管理数据变更，为企业级的数据治理提供支持，是企业实现数据自服务、推动企业数据化运营的可行路线。
+
