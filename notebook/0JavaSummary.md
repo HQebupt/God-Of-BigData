@@ -764,7 +764,7 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   当系统（leader）收到一个来自客户端的写请求，到返回给客户端，整个过程从leader的视角来看会经历以下步骤：
 
 - leader **append log entry**
-- leader issue AppendEntries RPC in parallel
+- leader issue AppendEntries RPC in parallel (日志复制)
 - leader wait for majority response, **committed**
 - leader **apply entry to state machine**
 - leader reply to client
