@@ -1,6 +1,6 @@
 # Kafka调优
 
-## 1案例1
+## 1案例1 (emc)
 
 在 Kafka 中，处理请求是不区分优先级的，Kafka 对待所有请求都一视同仁。这种绝对公平的策略有时候是有问题的。
 
@@ -30,7 +30,7 @@
 
 
 
-## 案例2
+## 案例2 (emc)
 
 案例1：发现删除topic比较慢。怎么分析？（这不就掉坑里去了吗？讲不清楚）
 
@@ -60,7 +60,7 @@ control.plane.listener.name=CONTROLLER
 - RemoteTimeMs：Kafka 的读写请求（PRODUCE 请求和 FETCH 请求）逻辑涉及等待其他 Broker 操作的步骤。RemoteTimeMs 计算的，就是等待其他 Broker 完成指定逻辑的时间。因为等待的是其他 Broker，因此被称为 Remote Time。这个监控项非常重要！Kafka 生产环境中设置 acks=all 的 Producer 程序发送消息延时高的主要原因，往往就是 Remote Time 高。因此，如果你也碰到了这样的问题，不妨先定位一下Remote Time 是不是瓶颈。（**项目经验：某些topic的Producer的延迟在ack=all的情况下特别高，RemoteTimeMs达到了1s以上，副本broker ping延迟查过了500ms，网络交换机出现了问题，更换交换机**）
 - TotalTimeMs：计算 Request 被处理的完整流程时间。这是最实用的监控指标，没有之一！毕竟，我们通常都是根据 TotalTimeMs 来判断系统是否出现问题的。一旦发现了问题，我们才会利用前面的几个监控项进一步定位问题的原因。
 
-## 案例3-Controller-新浪案例
+## 案例3-Controller-（sina)
 
 某些核心业务的Partion一直处于“不可用”状态，分区的 Leader 显示是 -1。
 
@@ -96,15 +96,44 @@ numChildren = 0
 
 - **监听这个节点数据是否发生了变更**。同样，一旦发现该节点的内容发生了变化，Broker 也会立即启动新一轮的 Controller 选举。
 
-### 案例4：创建了主题后，有些 Broker 依然无法感知到
+### 案例4：创建了主题后，有些 Broker 依然无法感知到（Sina）
 
 Kafka 0.10.0.1 在线上环境中，很多元数据变更无法在集群的所有 Broker 上同步了。具体表现为，创建了主题后，有些 Broker 依然无法感知到。
 
 我的第一感觉是 Controller 出现了问题，但又苦于无从排查和验证。后来，我想到，会不会是 Controller 端请求队列中积压的请求太多造成的呢？因为当时 Controller 所在的 Broker 本身承载着非常重的业务，这是非常有可能的原因。
 
-- 源码中新加了一个监控指标，用于实时监控 Controller 的请求队列长度。
-- 当更新到生产环境后，我们很轻松地定位了问题。果然，由于 Controller 所在的 Broker 自身负载过大，导致 Controller 端的请求积压，从而造成了元数据更新的滞后。精准定位了问题之后，解决起来就很容易了。后来，社区于 0.11 版本正式引入了相关的监控指标。
+- 源码中新加了一个监控指标，用于实时监控 Controller 的请求队列长度。（**源码是RequestChannel的RequestQueue**）
+- 当更新到生产环境后，我们很轻松地定位了问题。果然，由于 Controller 所在的 Broker 自身负载过大，导致 Controller 端的请求积压，从而造成了元数据更新的滞后。精准定位了问题之后，解决起来就很容易了。后来，社区于 0.11 版本正式引入了相关的监控指标（`Request Queue Size: kafka.network:type=RequestChannel,name=RequestQueueSize`，还有Request在Channel中的等待时间）。
 
 UpdateMetadataRequest：更新 Broker 上的元数据缓存。集群上的所有元数据变更，都首先发生在 Controller 端，然后再经由这个请求广播给集群上的所有 Broker。在我刚刚分享的案例中，正是因为这个请求被处理得不及时，才导致集群 Broker 无法获取到最新的元数据信息。
 
 - 解决办法，既然Controller的负载太高了，就迁移Controller到比较低的机器上。
+
+### 案例5：二次开发Broker
+
+如何确保所有副本上的数据是一致的。
+
+- 最常见的方案：Leader/Follower 备份机制
+  -  分区 Leader，负责响应客户端的读写请求
+  -  Follower，被动地同步 Leader 副本中的数据
+
+在生产环境中发现，一旦 Broker 上的副本数过多，Broker 节点的内存占用就会非常高。查过 HeapDump 之后，我们发现根源在于 ReplicaFetcherThread 文件中的 buildFetch 方法。
+
+```scala
+val builder = fetchSessionHandler.newBuilder()
+
+// 改进后
+    /** A builder that allows for presizing the PartitionData hashmap, and avoiding making a
+     *  secondary copy of the sessionPartitions, in cases where this is not necessarily.
+     *  This builder is primarily for use by the Replica Fetcher
+     * @param size the initial size of the PartitionData hashmap
+     * @param copySessionPartitions boolean denoting whether the builder should make a deep copy of
+     *                              session partitions
+     */
+val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
+```
+
+- 实例化一个 LinkedHashMap。如果分区数很多的话，这个 Map 会被扩容很多次，因此带来了很多不必要的数据拷贝。这样既增加了内存占用，也浪费了 CPU 资源。（初始化16）
+
+
+
