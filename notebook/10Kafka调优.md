@@ -109,7 +109,7 @@ UpdateMetadataRequest：更新 Broker 上的元数据缓存。集群上的所有
 
 - 解决办法，既然Controller的负载太高了，就迁移Controller到比较低的机器上。
 
-### 案例5：二次开发Broker
+### 案例5：Sina二次开发Broker
 
 如何确保所有副本上的数据是一致的。
 
