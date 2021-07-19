@@ -136,7 +136,7 @@ val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
 - 背景：Our current follower replica fetching logic has huge CPU cost with num.partitions to fetch from, and it scales non-linearly as well. There are a bunch of optimizations we can consider to try to reduce its cost and hopefully make it to be linear against the num.partitions.
 - PR: Fetch session optimizations (mostly presizing the next hashmap, and avoiding making a copy of sessionPartitions, as a deep copy is not required for the ReplicaFetcher)
 - 实例化一个 LinkedHashMap。如果分区数很多的话，这个 Map 会被扩容很多次，因此带来了很多不必要的数据拷贝。这样既增加了内存占用，也浪费了 CPU 资源。（初始化16）
-- 2.2.0 2019.5 发布，fix version: 2.5.0 
+- 2.2.0 2019.5 发布，fix version: 2.5.0 （April 16, 2020）
 
 > [KAFKA-9039: Optimize ReplicaFetcher fetch path](https://github.com/apache/kafka/pull/7443#)
 
