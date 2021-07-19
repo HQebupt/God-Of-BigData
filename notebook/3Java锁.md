@@ -737,3 +737,8 @@ public class Semaphore implements java.io.Serializable {
 
 
 
+### 8 synchronized区别ReentrantLock
+
+- Synchronized，重量级，线程切换，耗费系统资源，非公平锁，不可中断，一个等待队列
+- ReentrantLock，轻量级，不切换线程，cas+volatile，选择公平，选择中断，Condition等待队列
+  - 适用场景：时间锁、可中断锁、多个条件变量
