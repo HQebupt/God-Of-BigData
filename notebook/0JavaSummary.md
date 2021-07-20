@@ -359,13 +359,24 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 - WeakReference 引用的对象，当没有强引用指向它后，将在 GC 时被回收；如果其作为 Map.Entry 中的key，则整个 Entry 会被移除。
 
 ```java
-    Obejct reference = new Object();    WeakReference<Obejct> weakRef = new WeakReference<>(reference);    reference = null;    System.gc(); // 被回收    AssertNull(weakRef.get())
+    Obejct reference = new Object();    
+		WeakReference<Obejct> weakRef = new WeakReference<>(reference);    
+		reference = null;    
+		System.gc(); // 被回收    
+		AssertNull(weakRef.get())
 ```
 
 - SoftReference 与 WeakReference 特性类似，区别在于 SoftReference 被回收的时机是在 JVM 内存不足之时；因此适合用于做缓存
 
 ```java
-		String str = new String("abc");		SoftReference<String> softReference = new SoftReference<String>(str);		// 浏览器的回退可以用缓存设计：    if(softReference.get() != null) {        page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存    } else {        page = browser.getPage();// 内存不足，软引用的对象已经回收        softReference = new SoftReference(page);// 重新构建软引用    }
+		String str = new String("abc");		
+		SoftReference<String> softReference = new SoftReference<String>(str);		// 浏览器的回退可以用缓存设计：    
+		if(softReference.get() != null) {        
+      	page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存    
+    } else {        
+      page = browser.getPage();// 内存不足，软引用的对象已经回收        
+      softReference = new SoftReference(page);// 重新构建软引用    
+    }
 ```
 
 - PhantomReference，调用 get 永远返回 null，用于跟踪引用何时被 enqueue 至 ReferenceQueue 中.**虚引用必须和引用队列(ReferenceQueue)联合使用**。
@@ -375,8 +386,56 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   > 对于用户来看，如果程序发现某个虚引用已经被加入到ReferenceQueue，那么回收之前采取一些行动。
 
 ```java
-    String str = new String("abc");    ReferenceQueue queue = new ReferenceQueue();    // 创建虚引用，要求必须与一个引用队列关联    PhantomReference pr = new PhantomReference(str, queue);
+String str = new String("abc");  
+ReferenceQueue queue = new ReferenceQueue();    // 创建虚引用，要求必须与一个引用队列关联    
+PhantomReference pr = new PhantomReference(str, queue);
 ```
+
+### 线程池
+
+- ThreadPoolExecutor，关键的属性
+
+  - corePoolSize，一旦有新任务提交，而线程池当前线程数小于此值，则 create 新的线程（即 core thread 只在新任务提交时创建，但是可以通过调用 prestartCoreThread 、prestartAllCoreThreads 方法改变策略）
+
+  - maximumPoolSize，一旦有新任务提交，而线程池当前线程数小于此值且大于 corePoolSize，则进入队列排队，只有队列被填满才会创建新线程
+
+  - Keep-alive times，超过 corePoolSize 的线程如果空闲时间超过此值，就会被终止
+
+  - Queueing，若小于 corePoolSize 的线程在运行，则 executor 更倾向于增加新线程而不是排队；反之则倾向于排队；若队列满，则创建新线程；若队列满且线程数超过 maximumPoolSize 则 reject；三种排队策略：
+
+    - Direct handoffs，SynchronousQueue，不持有任务，接收到任务直接转交给Executor（newCachedThreadPool采取的是此策略）
+    - Unbounded queues，LinkedBlockingQueue，若任务提交数超过 corePoolSize 支持的线程，新任务会持续添加进队列，而 maximumPoolSize 不会生效（newSingledThreadPool、newFixedThreadPool采取的是此策略）
+    - Bounded queues，ArrayBlockingQueue，Queue sizes 和 maximum pool 需要相互权衡
+
+  - Reject任务后的策略：
+
+    - AbortPolicy，抛异常 RejectedExecutionException（默认策略）
+    - CallerRunsPolicy，交由提交线程自己去执行 execute
+    - DiscardPolicy，丢弃任务
+    - DiscardOldestPolicy，丢弃队列头部任务
+    - 自定义 RejectedExecutionHandler
+
+  - Hook Methods，beforeExecute，afterExecute，若钩子函数或 callback 调用异常，线程会被终止
+
+  - Executors常见的 ThreadPool 参数
+
+    - cachedThreadPool
+
+    ```java
+        new ThreadPoolExecutor(0, Integer.MAX_VALUE,
+                                      60L, TimeUnit.SECONDS,
+                                      new SynchronousQueue<Runnable>());
+    ```
+
+    - fixedThreadPool
+
+    ```java
+    	new ThreadPoolExecutor(nThreads, nThreads,
+                                  0L, TimeUnit.MILLISECONDS,
+                                  new LinkedBlockingQueue<Runnable>());
+    ```
+
+    
 
 ## 3 JVM
 
@@ -591,11 +650,21 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
 ### 调优
 
+- 如何判断一个程序是否正常？如何评价垃圾收集器的性能好坏呢？
+  - 吞吐量：应用程序耗时，GC耗时，不低于95%
+  - 停顿时间
+  - 垃圾回收频率
+-  降低 Minor GC 频率
+  - 短对象多，扩容 Eden
+  - 多对象多，谨慎扩容
+
 - 单次停顿过长
   - Xmx、Xms
   - AlwayPretouch、Swap、Cpu load
   - Concurrent GC Thread
-- 频率较高，整体吞吐率低
+- Full GC频率较高，整体吞吐率低
+  - 减少创建大对象，业务优化
+  - 增大堆
 - 回收率较低（新生代、老年代）
 - 导致 FullGC 的失败
   - CMS Failure：PromotionFailed、ConcurrentModeFailure
