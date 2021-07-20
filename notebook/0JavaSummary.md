@@ -699,6 +699,7 @@ PhantomReference pr = new PhantomReference(str, queue);
       - 会话一致性
       - **最终一致性**：用户只能读到某次更新后的值，但系统保证数据将最终达到完全一致的状态，只是所需时间不能保障。
       - 弱一致性
+      - 顺序一致性：ZAB
 
 - BASE
 
@@ -1055,19 +1056,27 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 - 领导者节点作为唯一提议者。
 
+## ZAB
 
+### 0定义
 
-### ZAB（ZooKeeper Atomic Broadcast）
+- 原子一致性协议，属于顺序一致性
 
-- 定义
-  - leader、followers：Zookeeper 集群中，一个节点充当 leader 角色，其余皆为 follower. 
-    - leader职责是接受所有客户端请求，协调内部各个服务器。 
-    - follower职责是处理客户端非事务请求，参与Proposal的投票和leader选举。
-  - transactions：leader 将客户端变更传播给 follower（TODO）
-  - 'e'：leader 的纪元 / epoch（任期、term等类似概念）. 纪元是一个整型，leader 当选时的纪元必须比之前的leader纪元要大（TODO）
-  - 'c'：一个由 leader 生成的有序数值，从 0 开始并单调递增. 这个值和 epoch 一并用于给接收到的客户端状态变更请求排序（二者通过位运算共同构成 ZXID ）（TODO）
-  - 'F.history'：follower 的历史队列，用于提交按顺序接收到的事务（TODO）
-  - 待决事务：一组位于 F.history 中的事务，其序列号小于当前提交的序列号（TODO）
+- 2种角色，3种状态
+  - leader：接受所有客户端请求
+  - follower：处理客户端非事务请求，参与Proposal的投票和leader选举。
+  - Leading：主服务节点状态
+  - Following：从服务节点状态
+  - Looking：选举状态
+- ZXID:Epoch e和序列号c
+  - ZXID 低 32 位为自增计数，高 32 位代表了 Leader 周期 epoch 编号
+  - 新的 Leader ，用最大事务提议的 ZXID，解析epoch，然后+1，作为新的ZXID
+
+- transactions：leader 将客户端变更传播给 follower（TODO）
+- 'e'：Leader 的 epoch（任期、term等类似概念）
+- 'c'： Leader 生成的序列号，单调递增. 这个值和 epoch （二者通过位运算共同构成 ZXID ）
+- 'F.history'：Follower 的历史队列，提交按顺序接收到的事务
+- 未提交的事务：F.history 中的事务，序列号小于当前提交的序列号
 
 - ZAB 所需前提
   1. 复制担保
@@ -1077,65 +1086,77 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   2. 只要大多数（quorum）nodes 已启动，事务就会被复制
   3. 若 node 故障但随后又重启，它应能追上故障期间已经复制完成的事务
 
-#### 具体实现
+### 1消息广播复制
 
-- 消息广播复制(2PC的变种)
-  - 客户端读取任何一个 Zookeeper 节点
-  - 客户端将状态变更写入任何一个 Zookeeper 节点，这个状态变更就会被转发到主（leader）节点
-  - Zookeeper 使用一个两阶段提交协议的变种来实现事务复制到 follower
-    1. 当 leader 接收到客户端的修改更新请求，它就生成带有序列号 c 和 leader epoch的事务，并发送给所有follower ( leader)
-    2. follower 将事务添加到自己的 history queue 中并回复 leader 一个 ACK (follower)
-    3. 当 leader 接收到一组 quorum 的 ACK 后，它就向 quorum 发送这个事务的 commit 请求(leader)
-    4. follower 会在收到 commit 请求后就提交事务，除非 follower 本地的 history queue 中事务的序列号都低于 c（即历史事务早于当前事务），这时，它将一直等待直到所有早先的事务（待解决事务）的 commit 请求都接收到并处理完成后，才去提交当前的事务 (follower)
+- Client可读任意节点
+- Client写请求会被转发给Leader
+- **2PC变种来实现日志复制**
+  1. leader 接收写请求，生成序列号 c 和 leader epoch的事务，发送所有Follower
+  2. Follower 将事务添加 history queue ,回复ACK
+  3. leader 接收到大多数ACK ，发送 commit 请求
+  4. Follower 提交事务
+     - 保证顺序性的前提：Follower等待序列化号小的事物处理完成后，提交当前的事务 
 
 <img src="0JavaSummary.assets/120353.png" alt="img" style="zoom:67%;" />
 
-- 集群崩溃恢复
+### 2集群崩溃恢复
 
-  - 当 leader 崩溃时，所有节点一起执行一个通用的一致恢复协议，之后集群恢复日常运作，确立一个新的 leader 来广播状态变更
+ leader 崩溃，发送leader选举
 
-  - 要充当 leader 角色，节点必须由一组 quorum nodes 的支持. 由于节点随时可能崩溃和恢复，随着时间推移会产生多个 leader，事实上一个节点可能充当一个角色数次
+- **选举过程**
 
-  - 节点的生命周期：每个节点一次执行协议的一个迭代，任何时候，一个进程可以中断当前迭代，跳转到 Phase 0 重新开始
+  - **Phase 0：选举（election）**
+    - 节点Looking，发起投票，服务器ID和ZXID
+    - 其它节点收到请求，对比ZXID，发起请求，投票给大的ZXID
+    - 节点统计投票，大多数同意，变成准Leading，其它节点变成Following
+  - **Phase 1：发现（discovery）**
+    - **准leader**收集节点的epoch值，发送epoch+1
+    - follower回复ACK，带上ZXID和历史事务日志（F.History）
+    - **准leader** 更新自身的ZXID和事务日志
+  - **Phase 2：同步（synchronization）**
+    - 准leader发送同步信息
+    - 半数Follower同步成功，准Leader成为Leader。
+  - **Phase 3：广播（broadcast）**
+    - leader接受client写请求
+    - 2PC提交：
+      - Leader保留提交日志，发送Propose广播给Follower
+      - Follower确认，回ACK
+      - Leader发送Commit消息，提交事务
 
-    - Phase 0：选举（election）
-    - Phase 1：发现（discovery）
-    - Phase 2：同步（synchronization）
-    - Phase 3：广播（broadcast）
+  >  Phase 1 和 2 对于集群内的相互一致性很重要，尤其是从故障中恢复时
 
-  - Phase 1 和 2 对于集群内的相互一致性很重要，尤其是从故障中恢复时
+- Phase 1 发现（目的：从 quorum 中找到最完备的 F.history）
 
-  - Phase 1 发现（摘要：从 quorum 中找到最完备的 F.history）
+  - **准leader**收集节点的epoch值，发送epoch+1
+  - follower回复ACK，带上ZXID和历史事务日志（F.History）
+  - **准leader** 更新自身的ZXID和事务日志
+  - quorum 做出保证：quorum中至少有一个节点（其 epoch 最大, ZXID最大）的 history queue 是最新的，完整的
 
-    - follower 和即将当选的 leader 通信，以便让 leader 收集信息知悉follower最近接收到的事务
-    - 这个步骤的目的是发现 quorum 中接收最多的变更序列，并开启新的纪元 epoch = e' 以免先前的leader提交它们的提议（proposal）
-    - quorum 拥有先前 leader 发送的所有变更，因此可以做出保证：quorum中至少有一个节点（其 epoch 最大或 epoch 不小于其他跟随者而 lastZxid 最大）的 history queue 中包含先前 leader 发送的所有变更，这同时也意味着新的 leader 也会拥有这些变更
+  <img src="../120367.png" alt="img" style="zoom:67%;" />
 
-    ![img](../120367.png)
+  > 注：理论上被选举出来的 prospective leader 应具有最大的 zxid，即接收了最新的事务，为什么还要向 quorum 中的 follower 获取历史事务？
 
-    > 注：理论上被选举出来的 prospective leader 应具有最大的 zxid，即接收了最新的事务，为什么还要向 quorum 中的 follower 获取历史事务？
+- Phase 2 同步（目的：将'发现'步骤中获得的 F.history 作为提案提出）
 
-  - Phase 2 同步（摘要：将'发现'步骤中获得的 F.history 作为提案提出）
+  - 准leader发送同步信息，将历史事务作为提案
+  - 半数Follower同步成功，准Leader成为Leader。
+    -  follower 自身的事务历史序列落后，认可 leader 
+  - 同步完成，恢复（recovery）阶段结束 
 
-    - '同步步骤'使用 leader 的历史更新事务副本来同步，这些事务在'发现步骤'中从集群中获得，同步完成后，整个协议的恢复（recovery）阶段结束 
-    - leader 和 follower 通信，将历史事务拿出来作为提案提出（leader）
-    - 如果 follower 自身的事务历史序列落后于 leader 的，follower 就认可 leader 的提议（follower）
-    - 当 leader 收到 quorum 的确认，它就分发提交（commit）消息至 quorum，此时 leader 就宣称确立，不再是潜在状态（leader）
-
-  ![img](0JavaSummary.assets/120365.png)
+<img src="0JavaSummary.assets/120365.png" alt="img" style="zoom:67%;" />
 
 
   - Phase 3 广播
-    - 如没有崩溃发生，节点永久地停留在这个阶段，一旦客户端发起一个写请求，节点就执行事务广播（leader）
+    - leader接受client写请求
+    - 2PC提交：
+      - Leader保留提交日志，发送Propose广播给Follower
+      - Follower确认，回ACK
+      - Leader发送Commit消息，提交事务
     - 对于 observer，leader 会发送 inform 消息，其中包含提议的内容（follower）
 
-![img](0JavaSummary.assets/120363.png)
+<img src="0JavaSummary.assets/120363.png" alt="img" style="zoom:67%;" />
 
 > 为了检测故障，ZAB 在 leader 和 follower 之间使用定期的心跳消息通信. 如果leader 在一段时间内没有收到 quorum（majority）的心跳，它就放弃自己自己的 leader 身份，将状态切换成选举和 Phase 0. 如果 follower 在一段时间内也没收到 leader 的心跳，就跳转到 Leader Election Phase.
-
-- ZXID
-  - ZXID 低 32 位为自增计数，高 32 位代表了 Leader 周期 epoch 编号
-  - 当选举出一个新的 Leader 时，就会从这个 leader 本地日志中去的最大事务提议的 ZXID，解析出对应的 epoch 值再自加 1，以此作为新的 ZXID 的高 32 位，低 32 位则从 0 开始
 
 ## 4 Zookeeper
 
