@@ -30,11 +30,11 @@
 - jdk12
   - ZGC并发卸载类
 
-### 1常见的Java问题
+## 1常见的Java问题
 
 - ArrayList, LinkedList, HashSet, HashMap, CopyOnWriteList, ConcurrentHashMap, ConcurrentLinkedQueue, volatile, Atomic, CAS, double check locking, happen-before, Object Header, false-sharing, ThreadExecutor(Cached, Fixed, Scheduled), syncronize, Lock, CountdownLatch, Barrier, Exchanger, JVM survivor, GC Algorithem, JVM tuning, syncronize tuning in JDK1.6, strong/weak/phantom reference, String pool
 
-#### 1.1 HashMap
+### HashMap
 
 - 两个参数影响其性能：initial capacity、load factor
   - 当哈希表的 Entry 个数达到二者的乘积，就会触发 rehash
@@ -88,6 +88,8 @@
     - 判断该 Node 是否为 TreeNode，如果是 TreeNode 则直接插入
     - 如果是 List，在链表尾部插入的同时，记录 binCount，若 binCount > 8 将链表转换为树
 
+  ![image-20210719222037297](0JavaSummary.assets/image-20210719222037297.png)
+  
   ```java
       final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
                      boolean evict) {
@@ -134,13 +136,13 @@
   
   ```
 
-#### 2.2 ConcurrentHashMap
+### ConcurrentHashMap
 
-> 漏掉了CopyOnWriteArrayList，后期有时间，补上。TODO
+HashTable 各个操作都是加锁的，ConcurrentHashMap的get 不加锁，put加锁。这会造成get的时候不一定拿到最新的数据，属于弱一致性的实现。因此，强一致性的场景，用HashTable。
 
-@jdk7 使用分段锁设计；iterator 不会抛 concurrentModification 异常，但是只能被一个线程操作；size 方法开销很大 
+@jdk7 使用分段锁设计；iterator 不会抛 concurrentModification 异常（造成读会读到老的数据），但是只能被一个线程操作；size 方法开销很大 。@jdk1.8之后，使用Synchronized同步锁。
 
-![img](0JavaSummary.assets/120290-1622708615286)
+<img src="0JavaSummary.assets/120290-1622708615286" alt="img" style="zoom: 67%;" />
 
 ```java
    public V put(K key, V value) {
@@ -166,19 +168,24 @@
 
 
 
-@jdk8 改为 CAS 设计，更细力度地控制锁，①对于一个空的Node，CAS无锁添加；对于非空的Node，对Node加锁（synchronized，锁可以被优化）；增加 addCount 方法专门记录 size ；并发修改一个下标的 Node 时才加 synchronized ，并且只锁定当前的 Node
+@jdk8 改为 CAS 设计
 
-- 取值操作不阻塞，因此与更新操作会有所重叠；取值操作反映最近正好已完成的更新，即这种反映遵循一种 happen-before 的关系；批量操作时，并发取值操作操作反映部分的插入、移除的结果，而非批量操作的整体完成后的结果；同理，迭代器操作反映的是迭代器创建那一刻的结果集
+- 对于一个空的Node，CAS无锁添加；
+- 对于非空的Node，对Node加锁（synchronized，锁可以被优化）；
+- 增加 addCount 方法专门记录 size ；并发修改一个下标的 Node 时才加 synchronized ，并且只锁定当前的 Node
+
+
 
 - isEmpty、size、containsValue 只在 map 不并发更新的时候准确，适合用于监控或估算，而不适于程序控制；不支持 Null Key/Value
 
 - putVal
 
+  - 在没有哈希冲突的情况下，使用CAS添加；有冲突，就用Synchronized把链表Node锁住，还是锁住的一个链表，不是整个map。
   - 计算 hash 值，自旋访问 table，table 为空则采用 CAS 初始化 table
   - 获取 hash 值对应节点位置 i，若该位置为空则 CAS 插入
   - 若有HashMap在扩容，则先执行 helpTransfer 帮助迁移到新 table。会再次自旋进入循环体。
   - 否则，以当前节点的链表、树的头结点为 lock 加锁，进行 add 操作
-
+  
   > 可以发现，和HashMap的putVal流程很类似，区别在于由于并发性，ConcurrentHashMap有CAS操作和synchronized。
 
 ```java
@@ -271,7 +278,7 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
     }
 ```
 
-##### size
+#### size优化
 
 - 1.8中的 size 增加 baseCount、counterCells 来辅助记录 size，优化性能
 
@@ -315,7 +322,32 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
 
 * 如果记录 counterCell 的 CAS 失败则调用 fullAddCount 继续自旋 CAS 直到成功
 
-#### 四种引用
+#### 适用场景
+
+ConcurrentHashMap: 数组+链表+红黑树+锁。红黑树在并发的情况下，删除和插入过程中，需要平衡，会操作大量的节点，因此竞争所资源激烈，代价相对于跳表高。
+
+> 因此，在单线程Map容器中，TreeMap容易来存取大数据量；线程安全的case下，SkipListMap来存大数据。
+
+![image-20210719222931125](0JavaSummary.assets/image-20210719222931125.png)
+
+1. HashMap 底层设计与实现，LoadFactor，为什么多线程环境下，put方法会造成死循环？为什么size>=8 之后，要转换成红黑树？红黑树能手写一个么？
+2. HashTable \ ConcurrectHashMap分别对应什么样的适用场景？
+3. ConcurrentHashMap 1.8之前是segment lock, 之后使用synchronized和CAS来更新，为什么？涉及1.6之后，对synchronized的优化，重量级锁、偏向锁、自旋锁
+4. ConcurrentSkipListMap 基于跳表实现的Map，优点是什么，对比ConcurrentHashMap的适用场景是什么？
+5. 互联网电商系统，往往都有黑名单，你觉得用什么样的数据结构来存储？如果要设计一个统计商品销量Top10的功能，用什么样的数据结构？
+6. 如果使用队列来实现抢购的排队，如何选择队列？特点是写多读少。
+
+### 跳表
+
+优化搜索的有序链表
+
+### CopyOnWriteArrayList
+
+特点：读，无所并发；写：复制在更新，copy回去。（读写分离的并发思想）
+
+适用于什么场景？
+
+### 四种引用
 
 - 强引用:无论什么时候都不会自动回收（场景：正常使用）
 - 软引用:空间不足才会回收对象（场景：适合缓存）
@@ -327,13 +359,24 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 - WeakReference 引用的对象，当没有强引用指向它后，将在 GC 时被回收；如果其作为 Map.Entry 中的key，则整个 Entry 会被移除。
 
 ```java
-    Obejct reference = new Object();    WeakReference<Obejct> weakRef = new WeakReference<>(reference);    reference = null;    System.gc(); // 被回收    AssertNull(weakRef.get())
+    Obejct reference = new Object();    
+		WeakReference<Obejct> weakRef = new WeakReference<>(reference);    
+		reference = null;    
+		System.gc(); // 被回收    
+		AssertNull(weakRef.get())
 ```
 
 - SoftReference 与 WeakReference 特性类似，区别在于 SoftReference 被回收的时机是在 JVM 内存不足之时；因此适合用于做缓存
 
 ```java
-		String str = new String("abc");		SoftReference<String> softReference = new SoftReference<String>(str);		// 浏览器的回退可以用缓存设计：    if(softReference.get() != null) {        page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存    } else {        page = browser.getPage();// 内存不足，软引用的对象已经回收        softReference = new SoftReference(page);// 重新构建软引用    }
+		String str = new String("abc");		
+		SoftReference<String> softReference = new SoftReference<String>(str);		// 浏览器的回退可以用缓存设计：    
+		if(softReference.get() != null) {        
+      	page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存    
+    } else {        
+      page = browser.getPage();// 内存不足，软引用的对象已经回收        
+      softReference = new SoftReference(page);// 重新构建软引用    
+    }
 ```
 
 - PhantomReference，调用 get 永远返回 null，用于跟踪引用何时被 enqueue 至 ReferenceQueue 中.**虚引用必须和引用队列(ReferenceQueue)联合使用**。
@@ -343,8 +386,56 @@ StrongReference、WeakReference、SoftReference、PhantomReference
   > 对于用户来看，如果程序发现某个虚引用已经被加入到ReferenceQueue，那么回收之前采取一些行动。
 
 ```java
-    String str = new String("abc");    ReferenceQueue queue = new ReferenceQueue();    // 创建虚引用，要求必须与一个引用队列关联    PhantomReference pr = new PhantomReference(str, queue);
+String str = new String("abc");  
+ReferenceQueue queue = new ReferenceQueue();    // 创建虚引用，要求必须与一个引用队列关联    
+PhantomReference pr = new PhantomReference(str, queue);
 ```
+
+### 线程池
+
+- ThreadPoolExecutor，关键的属性
+
+  - corePoolSize，一旦有新任务提交，而线程池当前线程数小于此值，则 create 新的线程（即 core thread 只在新任务提交时创建，但是可以通过调用 prestartCoreThread 、prestartAllCoreThreads 方法改变策略）
+
+  - maximumPoolSize，一旦有新任务提交，而线程池当前线程数小于此值且大于 corePoolSize，则进入队列排队，只有队列被填满才会创建新线程
+
+  - Keep-alive times，超过 corePoolSize 的线程如果空闲时间超过此值，就会被终止
+
+  - Queueing，若小于 corePoolSize 的线程在运行，则 executor 更倾向于增加新线程而不是排队；反之则倾向于排队；若队列满，则创建新线程；若队列满且线程数超过 maximumPoolSize 则 reject；三种排队策略：
+
+    - Direct handoffs，SynchronousQueue，不持有任务，接收到任务直接转交给Executor（newCachedThreadPool采取的是此策略）
+    - Unbounded queues，LinkedBlockingQueue，若任务提交数超过 corePoolSize 支持的线程，新任务会持续添加进队列，而 maximumPoolSize 不会生效（newSingledThreadPool、newFixedThreadPool采取的是此策略）
+    - Bounded queues，ArrayBlockingQueue，Queue sizes 和 maximum pool 需要相互权衡
+
+  - Reject任务后的策略：
+
+    - AbortPolicy，抛异常 RejectedExecutionException（默认策略）
+    - CallerRunsPolicy，交由提交线程自己去执行 execute
+    - DiscardPolicy，丢弃任务
+    - DiscardOldestPolicy，丢弃队列头部任务
+    - 自定义 RejectedExecutionHandler
+
+  - Hook Methods，beforeExecute，afterExecute，若钩子函数或 callback 调用异常，线程会被终止
+
+  - Executors常见的 ThreadPool 参数
+
+    - cachedThreadPool
+
+    ```java
+        new ThreadPoolExecutor(0, Integer.MAX_VALUE,
+                                      60L, TimeUnit.SECONDS,
+                                      new SynchronousQueue<Runnable>());
+    ```
+
+    - fixedThreadPool
+
+    ```java
+    	new ThreadPoolExecutor(nThreads, nThreads,
+                                  0L, TimeUnit.MILLISECONDS,
+                                  new LinkedBlockingQueue<Runnable>());
+    ```
+
+    
 
 ## 3 JVM
 
@@ -559,11 +650,21 @@ StrongReference、WeakReference、SoftReference、PhantomReference
 
 ### 调优
 
+- 如何判断一个程序是否正常？如何评价垃圾收集器的性能好坏呢？
+  - 吞吐量：应用程序耗时，GC耗时，不低于95%
+  - 停顿时间
+  - 垃圾回收频率
+-  降低 Minor GC 频率
+  - 短对象多，扩容 Eden
+  - 多对象多，谨慎扩容
+
 - 单次停顿过长
   - Xmx、Xms
   - AlwayPretouch、Swap、Cpu load
   - Concurrent GC Thread
-- 频率较高，整体吞吐率低
+- Full GC频率较高，整体吞吐率低
+  - 减少创建大对象，业务优化
+  - 增大堆
 - 回收率较低（新生代、老年代）
 - 导致 FullGC 的失败
   - CMS Failure：PromotionFailed、ConcurrentModeFailure
@@ -1177,14 +1278,14 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ### 无消息丢失
 
-1. 不要使用 producer.send(msg)，而要使用 producer.send(msg, callback)。记住，一定要使用带有回调通知的 send 方法。
-2. 设置 acks = all。acks 是 Producer 的一个参数，代表了你对“已提交”消息的定义。如果设置成 all，则表明所有副本 Broker 都要接收到消息，该消息才算是“已提交”。这是最高等级的“已提交”定义。
-3. 设置 retries 为一个较大的值。这里的 retries 同样是 Producer 的参数，对应前面提到的 Producer 自动重试。当出现网络的瞬时抖动时，消息发送可能会失败，此时配置了 retries > 0 的 Producer 能够自动重试消息发送，避免消息丢失。
-4. 设置 unclean.leader.election.enable = false。这是 Broker 端的参数，它控制的是哪些 Broker 有资格竞选分区的 Leader。如果一个 Broker 落后原先的 Leader 太多，那么它一旦成为新的 Leader，必然会造成消息的丢失。故一般都要将该参数设置成 false，即不允许这种情况的发生。
-5. 设置 replication.factor >= 3。这也是 Broker 端的参数。其实这里想表述的是，最好将消息多保存几份，毕竟目前防止消息丢失的主要机制就是冗余。
-6. 设置 min.insync.replicas > 1。这依然是 Broker 端参数，控制的是消息至少要被写入到多少个副本才算是“已提交”。设置成大于 1 可以提升消息持久性。在实际环境中千万不要使用默认值 1。
-7. 确保 replication.factor > min.insync.replicas。如果两者相等，那么只要有一个副本挂机，整个分区就无法正常工作了。我们不仅要改善消息的持久性，防止数据丢失，还要在不降低可用性的基础上完成。推荐设置成 replication.factor = min.insync.replicas + 1。
-8. 确保消息消费完成再提交。Consumer 端有个参数 enable.auto.commit，最好把它设置成 false，并采用手动提交位移的方式。就像前面说的，这对于单 Consumer 多线程处理的场景而言是至关重要的。
+1. 使用 producer.send(msg, callback)，回调
+2. 设置 acks = all
+3. 设置 retries ， Producer 自动重试
+4. 设置 unclean.leader.election.enable = false
+5. 设置 replication.factor >= 3。目前防止消息丢失的主要机制就是冗余。
+6. 设置 min.insync.replicas > 1
+7. replication.factor = min.insync.replicas + 1，可用性和一致性的权衡。
+8. 手动提交位移，Consumer  enable.auto.commit= false
 
 ### Producer
 
@@ -1203,7 +1304,7 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
   * 申请PID
     * Client：InitProducerIdRequest 发送给连接数最少的Broker
-    * Broker: TransactionCoordinator的ProducerIdManager生产唯一id，TransactionCoordinator负责与Producer通信，更新message的事物状态。
+    * Broker: TransactionCoordinator的ProducerIdManager生产id，TransactionCoordinator负责与Producer通信，更新message的事务状态。
     * PID 申请是向 ZooKeeper 申请，类似于CompareAndSwap的方式，来写入PID，写入成功，就申请成功；失败就重试。
 
 - Producer请求过程
@@ -1235,7 +1336,7 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ### Consumer
 
-- 是什么
+- ConsumerGroup是什么
   - 官网，可扩展、容错性的消费者机制
   - 多个Consumer实例。订阅主题，共同消费。某个挂掉，rebalance。
 - offset
@@ -1307,7 +1408,6 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 - 最后，Processor 线程发送 Response 给 Request 发送方
 
 这张图更加易懂化。
-
 
 <img src="0JavaSummary.assets/image-20210701092750874-5102873.png" alt="image-20210608215400269" style="zoom:80%;" />
 
