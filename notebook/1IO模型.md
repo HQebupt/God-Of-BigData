@@ -711,6 +711,12 @@ Netty在启动辅助类中可以灵活的配置TCP参数，满足不同的用户
 
 ## 6 零拷贝
 
+#### 是什么
+
+> "**Zero-copy**" describes computer operations in which the CPU does not perform the task of copying data from one memory area to another. This is frequently used to save CPU cycles and memory bandwidth when transmitting a file over a network.
+
+是指计算机执行操作时，CPU不需要先将数据从某处内存复制到另一个特定区域，这种技术通常用于通过网络传输文件时节省CPU周期和内存带宽。
+
 实现的两种方式分别是：
 
 - **mmap+write**
@@ -731,9 +737,7 @@ Java进程发起Read/Write请求加载数据的大致流程：底层调用Linux 
 
 > DMA（Direct Memory Access）直接内存访问技术，本质上来说他就是一块主板上独立的芯片，通过它来进行内存和IO设备的数据传输，从而减少CPU的等待时间。
 
-#### 是什么
 
-是指计算机执行操作时，CPU不需要先将数据从某处内存复制到另一个特定区域，这种技术通常用于通过网络传输文件时节省CPU周期和内存带宽。
 
 **利用虚拟内存，让内核空间和用户空间的虚拟地址，映射到同一个物理内存。这样DMA填充这块缓冲区的时候，两个空间都可见。**
 
@@ -832,7 +836,7 @@ public abstract long transferTo(long position, long count, WritableByteChannel t
 
 - `sendfile+DMA gather`方式产生2次DMA拷贝，没有CPU拷贝，而且也只有2次上下文切换。虽然极大地提升了性能，但是需要依赖新的硬件设备支持。
 
-https://blog.csdn.net/zhengchao1991/article/details/104524468
+参考：[简单易懂](https://blog.csdn.net/zhengchao1991/article/details/104524468) [大神的Linux I/O 原理和 Zero-copy 技术全面揭秘](https://mp.weixin.qq.com/s/TEUrcD4c_8Aw7bzTXr83kw)
 
 ## 6 总结
 

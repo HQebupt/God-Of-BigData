@@ -91,7 +91,23 @@ Monitor是线程私有的数据结构，每一个线程都有一个可用monitor
 
 **synchronized通过Monitor来实现线程同步，Monitor是依赖于底层的操作系统的Mutex Lock（互斥锁）来实现的线程同步。**
 
-> 为什么 JDK 6之前synchronized效率低？
+> Mutex Lock实现：CPU指令，swap或exchange指令，是把寄存器和内存单元的数据相交换。
+>
+> ```python
+> lock: 
+> 	if(mutex > 0){ # mutex = 1 表示锁空闲
+> 		mutex = 0;   # mutex = 0 表示锁占用
+> 		return 0; 
+> 	} else 
+> 		挂起等待; 
+> 	goto lock;
+> 		
+> unlock: 
+> 	mutex = 1; 
+> 	唤醒等待Mutex的线程; 
+> ```
+>
+> 
 
 因为它依赖于操作系统的互斥锁来实现的。我们称之为“重量级锁“
 
