@@ -1288,7 +1288,12 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ## 6 kafka
 
-分布式流处理框架，构建流处理应用，企业级的消息引擎
+分布式流处理框架，企业级的消息引擎
+
+- 缓冲和削峰
+- 解耦和扩展性
+- 冗余
+- 异步通信
 
 ### 概念
 
@@ -1306,6 +1311,8 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ### 无消息丢失
 
+从Producer应该做什么，Broker做什么，Consumer做什么来分析？
+
 1. 使用 producer.send(msg, callback)，回调
 2. 设置 acks = all
 3. 设置 retries ， Producer 自动重试
@@ -1316,9 +1323,40 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 8. 手动提交位移，Consumer  enable.auto.commit= false
 9. 极端情况，Kafka生产者写消息不丢失，page cache 改成同步落磁盘
 
+
+
+1. Producer丢失消息，从哪里分析？什么原因会导致消息丢失？解决？
+
+   - 没有发送到Broker，由于网络抖动 
+   - 消息太大了，Broker不接收
+
+2. Consumer端丢失数据的现象，想读的消息没有读上？场景，解决？
+
+   - Consumer获取消息，开启了多个线程处理，而**自动地向前更新了Offset**。如果某个线程运行失败，Consumer就丢失了消息。
+   - (有一个方案是Consumer不要开启自动提交offset，让所有线程消费完才手动提交。**会不会出现消息被消费了多次的情况呢?有没有好的方案**)
+
+   >  min.insync.replicas=1理解？
+   >
+   >  思考题：Kafka有一个隐私的消息丢失场景：增加主题分区。当增加主题分区后，如果Producer先于Consumer感知到这个分区，而Consumer设置的是从latest的地方读取数据，那么就会存在数据丢失。有什么解决办法么？
+
+
+
+
 ### Producer
 
 * TCP连接是如何建立的
+
+  * Producer会与`bootstrap.servers`创建TCP连接，不用的，超时9分钟自动关闭。（大集群有优化空间：3-4台配置足矣）
+  * 创建KafkaProducer之后，后台会启动Sender线程，该线程运行时首先会创建与Broker的连接。
+  * KafkaProducer 向某一台Broker再次请求集群的metadata，包括自己订阅Topic的所有meatadata
+  * KafkaProducer向Topic 分区的leader的broker发起TCP连接，准备写数据。
+
+  > KafkaProducer是线程安全的么？KafkaProducer和Sender线程共享只有RecordAccumulator类，使用ConcurrentMap<TopicPartiion,Deque>,TopicPartition是不可变类，Deque用到的地方，都加了锁。所以是线程安全的。
+
+* TCP的连接除了初始化创建，可能还有什么？
+
+  * Producer更新元数据
+  * Producer消息发送时
 
 - 幂等性如何实现？0.11，at least once + 幂等 = exactly once
 
@@ -1365,6 +1403,14 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ### Consumer
 
+- Consumer的TCP连接
+  - 什么时候创建？调用KafkaConsumer.poll方法
+  - 讲一下创建的过程？3次请求
+    - 寻找FindCoordinator和获取集群的metadata（Consumer发起）-- 最后被关闭
+    - 连接Coordinator（Consumer发起）-- 一直被复用
+    - 连接分区副本的leader（Consumer发起）---一直被复用
+    - TCP生命周期，默认9分钟
+
 - ConsumerGroup是什么
   - 官网，可扩展、容错性的消费者机制
   - 多个Consumer实例。订阅主题，共同消费。某个挂掉，rebalance。
@@ -1378,19 +1424,28 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
     - 心跳线程。规避因消息处理速度慢而下线，引发rebalance。
   - 异步非阻塞，适合流式
 
-### Rebalance
+### Rebalance&Coordinator
+
+- Broker有Coordinator组件，负责协调ConsumerGroup的消费情况
 
 - 坏处
-  - Consumer 端 TPS
+  
+  - STW，Consumer 端 TPS
   - 慢
   - 无局部性原理
+  
 - 原因
   - Consumer数量
   - 订阅Topic数量
   - 订阅Topic Partition数
+  
 - 策略，由Coordinator定
   - 轮询
   - StickyAssignor，粘性策略
+
+#### 如何避免计划外Rebalance？
+
+主要是解决原因第1条
 
 > Coordinator认为Consumer实例挂了？
 >
@@ -1410,6 +1465,99 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 * 如何确定Coordinator的broker
   * `partitionId=Math.abs(groupId.hashCode() % offsetsTopicPartitionCount)`这个副本的leader
+
+### Offset
+
+- 自动提交：默认5s，Consumer后台启动1个线程提交位移。逻辑上来讲，poll先提交上一批次的offset，在拉取数据。
+  - Rebalance会出现消费重复，5s提交，但是3s出现Rebalance
+- 手动提交有3种
+  - 同步commitSync() 直接阻塞，直到成功。
+  - 异步commitAsync() 不阻塞，有callback。缺点是什么？遇到问题后，不能重试提交offset操作。因为重试其实也没有用，因为它自身的offset是过期的。
+  - 更加精细化的同步和异步的
+
+- 最佳实践：使用2者，利用commitSync的自动重试来避免由于网络瞬间抖动和Broker GC导致失败，兼顾用commitAsync来提升TPS。
+
+- 如何解决CommitFailedException？
+
+  - 原因：`KafkaConsumer.commitSync() `, Rebalance重新分配分区，Consumer提交offset到一个不再属于它消费的partition。
+
+  - 解决：如果这个Consumer的心跳发的不及时，说明它本身不合格，让它退出就退出了，不管；另外，如果是一批消息消费加上业务处理时间大于了`max.poll.interval.ms=5分钟`，**这就是很经典的场景。而且真实存在。解决方法有4个方向**
+
+        1. 减少下游处理单条消息的时间，优化业务系统，是最值得的事情
+        2. 加大`max.poll.interval.ms`，原则就是要计算一下总时间= 平均时间 * 一批总条数（默认500）
+        3. 降低一次poll的总条数：`max.poll.records`
+        4. 最高级的，下游多线程处理加速。比如Flink的KafkaConsumerThread就是这样。
+
+    > 思考：推荐第1个，其次2、3个，最后一个难，不容易处理offset的提交。
+    >
+    > 1. 发生这个异常，会终止这个Consumer继续消费吗？
+    >
+    > 2. 如何写一个多线程处理的高效Consumer？
+
+### 多线程Consumer方案
+
+consumer 是单线程。1个是消费主线程，1个是心跳线程。
+
+两种线程方案：
+
+1. 开启多个线程，每个线程里都有一个自己的kafka Consumer 实例，共享一个ConsumerGroup。一个线程的逻辑是：poll数据---> process数据--->再次poll数据
+2. 分成①拉取数据线程和②处理业务线程 2个部分。拉取的数据直接交给另外一个线程池去处理。
+
+| 方案  | 优点                            | 缺点                                                         |
+| ----- | ------------------------------- | ------------------------------------------------------------ |
+| 方案1 | 1. 实现简单                     | 1. 不容易扩展，最大的线程数不能超过partition的总数           |
+|       | 2. 消息可以保证是有序地进行消费 | 2. 如果process耗时太多，容易发生Rebalance                    |
+|       | 3. 速度快，没有线程间交互的开销 | 3. 占用资源，每个Consumer线程都需要维持TCP连接，还有暂用内存资源 |
+| 方案2 | 1. 解耦了，方便扩展             | 1. 实现复杂                                                  |
+|       |                                 | 2. 不能保证消费消息的有序性。让一个分区的数据让同一个线程消费，能够保证有序性。 |
+|       |                                 | 3. 消费的链路拉长了，offset提交不好控制。（可以解决）        |
+
+
+
+- 方案2如何提交offset？实现一套多线程+管理offset的方案
+  - 约定成1个线程消费者，后面是线程池来进行业务处理
+
+ #### 简单思路
+
+- 消费线程：poll消息，扔给业务线程池。
+- 当业务线程完成，提交offset
+  - 业务线程异常，丢数据
+  - Rebalance，重复消费
+
+#### Partition粒度消费
+
+让某个Partition只能被一个业务线程处理，处理完之后，在Consumer poll线程提交offset（不再是业务线程），再去拉取数据。
+
+- 消费线程，也就是主入口线程：poll消息之后，进行3步骤
+
+  - 按照Partition的粒度，分发到业务线程池，pause这些Partition的消费
+  - 检查outstandingWorker，更新offset，resume已处理过的分区的下一次消费
+  - 提交offset，有间隔的提交，最后最好清空一下offsetMap
+
+- 线程池业务线程：一个线程只处理相同分区的数据
+
+  - process 业务
+  - 更新offset
+  - 返回最新的offset、
+  - 添加stop方法，方便rebance的时候，等待业务完成。
+
+- Rebalance监听器：处理Rebalance的offset。
+
+  - 一旦发生Rebalance，Consumer是停止了的，但是数据已经给了业务线程池了。
+
+- 因此，Rebalance发生前，要给所有的业务线程，发送stop命令，停止处理；
+
+  - 这个时候需要业务线程配合，要把最新的位移信息返回出来。
+  - 然后Rebalance的监听器，提交这次位移。保证了数据的不丢不重复。
+  - 最后，Rebalance开始，consumer 重新获得新的分区，开始从上一次提交的offset开始消费。完美的不丢不重复。
+
+  > 整个方案的好处是：约定一个work任务只能处理同一个分区的数据，这个分区的数据不处理完，就不poll这个分区的数据。保证了两边的解耦，可以加大业务线程池来提高效率。（比如topic有20个partition，最多可以启动20个业务线程对它进行处理。相比于第1种方案，它也要启动20个consumer线程，但是存在Rebalance的风险。）
+  >
+  > - pause什么场景下用？pause是暂停一个分区拉取数据，而且不会触发Rebalance，常常`resume`搭配使用。
+  > - wakeup什么时候用，解决什么问题的？wakeup是唤醒一个Consumer线程的，特别地用于abort 长时间阻塞的`poll`操作，可以用来停止一个Consumer。
+  > - **Consumer在持续消费的时候，为什么poll总是能够准备地探测到下一次要拉取的信息？因为Consumer内部会维护一个指针，知道每次拉取了到了哪个位置，所以即使没commit offset，它也能够准备知道消费哪一条。但是重启Consumer或者Rebalance，这个指针就需要重置了。**
+
+
 
 ### Controller
 
@@ -1545,12 +1693,26 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 - 监控 Kafka
   - Kafka Manager、Kafka Monitor、JMX 监控、JMXTool
+  
 - Broker 的 Heap Size 如何设置
   - 稳定后，手动触发(jmap)Full GC，存活对象的 1.5~2 倍。 6GB。
+  
 - 估算 Kafka 集群的机器数量？
   - 带宽
   - 磁盘
   
+- Kafka某个Topic的分区数量如何确定？需要考虑你的目标是什么？
+
+  - 比如Producer的TPS是10万条/秒，记为T1, 然后在真实环境中，创建仅有1个分区的topic，往里面写，看看TPS=T2，这个就是每个分区能够写入的最大条数。然后分区数=T1/T2。（简单有效。）
+
+- JVM参数：
+
+  ```bash
+  export KAFKA_HEAP_OPTS=--Xms6g  --Xmx6g
+  export  KAFKA_JVM_PERFORMANCE_OPTS= -server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ExplicitGCInvokesConcurrent -Djava.awt.headless=true
+  bin/kafka-server-start.sh config/server.properties
+  ```
+
   
 
 ## Linux 
@@ -1716,7 +1878,7 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ## 杂货
 
-### 企业监控平台Prometheus
+### 监控平台Prometheus
 
 | Zabbix                                                       | Prometheus                                                   |
 | :----------------------------------------------------------- | :----------------------------------------------------------- |
@@ -1774,11 +1936,3 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - ReplicaSet：管Pod
   - Deployment：管理Pod、ReplicaSet
   - Service：
-
-### 小米
-
-
-
-- 元数据治理：元数据管理平台包括：元数据采集服务，应用开发支持服务，元数据访问服务、元数据管理服务和元数据分析服务。
-- 有利于统一数据口径、标明数据方位、分析数据关系、管理数据变更，为企业级的数据治理提供支持，是企业实现数据自服务、推动企业数据化运营的可行路线。
-
