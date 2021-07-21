@@ -1314,6 +1314,7 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 6. 设置 min.insync.replicas > 1
 7. replication.factor = min.insync.replicas + 1，可用性和一致性的权衡。
 8. 手动提交位移，Consumer  enable.auto.commit= false
+9. 极端情况，Kafka生产者写消息不丢失，page cache 改成同步落磁盘
 
 ### Producer
 
@@ -1498,9 +1499,25 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 ### 原理
 
-- 高性能磁盘读写原理
-- 
+- 高性能、高吞吐、低延时、速度快的原因
+
+  - 磁盘顺序读写
+
+  - Page Cache，避免Object消耗，避免GC
+
+  - 零拷贝
+
+    - 生产者是`mmap+write `,写入到页缓存，页缓存映射文件
+    - 消费者或者Follower: sendfile，数据从Page Cache 直接发送到网络
+
+  - Partition+LogSegment+二分查找索引，二进制格式文件: partition文件夹、LogSegment文件、多种索引
+
+  - 批量读写、批量压缩减少网络IO
+
+    
+
 - Zero Copy
+  
   - Kafka: 生产者是`mmap+write`, 消费者或者Follow同步消息是`sendfile`
   - 基于 mmap 的索引
   - 日志文件读写TransportLayer， FileChannel 的 transferTo方法，操作系统的sendfile 
@@ -1533,6 +1550,8 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 - 估算 Kafka 集群的机器数量？
   - 带宽
   - 磁盘
+  
+  
 
 ## Linux 
 
