@@ -1565,13 +1565,16 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
   - Topic、Partition管理，Prefer 领导者选举：LeaderAndIsrRequest
   - Broker管理，元数据管理：UpdateMetadataRequest
   - StopReplicaRequest：使用场景：分区副本迁移和删除主题
-
 - 是什么
   - 给 Broker 发送 3 类请求，即 LeaderAndIsrRequest、StopReplicaRequest 和 UpdateMetadataRequest，
 - 脑裂，ActiveControllerCount>1，僵住
   - 背景：Controller FullGC太长，网络故障
   - 影响Topic的创建、修改、删除操作的**信息同步**。不影响现有topic的读写。
   - 解决：新的controller在zk生成新的controller epoch，并同步给broker，旧controller的指令，broker自动忽略。
+- 元数据更新流程
+  - Controller 启动，同步ZooKeeper
+  - 异步发送给其他 Broker
+  - 前面2步有时间差，导致Clients 访问的元数据不一定最新。（raft能解决吗）
 
 ### Broker处理请求流程
 
@@ -1611,11 +1614,37 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
   - 最后一步是，Processor 线程取出 Response 队列中的 Response，返还给 Request 发送 方。具体代码位于 Processor 线程的 processNewResponses 方法
   - 最底层的部分是 sendResponse 方法来执行 Response 发送。该方法底 层使用 Selector 实现真正的发送逻辑。
 
-### Zookeeper
+### 移除Zookeeper
 
 - 作用
-  - 元数据管理、成员管理、Controller 选举。（现在2.8已经移除zk）
-  - 
+  - 元数据管理、成员管理、Controller 选举。
+  
+- 为什么（2.8，KIP-500 移除zk）
+
+  - 让 Kafka 独立
+  - 性能问题，2百万的partitions，Controller切换，zk恢复2分钟，raft 32s
+  - KIP-500 ：自研 Raft， Controller 自选举
+  - raft暂时不支持ACLs
+
+- 性能问题是如何解决的？Controller加载元数据为什么就快了？raft
+
+  - Metadata as an Event Log 
+
+    - 元数据作为 Log 储存
+      - 有副本，高可用
+      - 日志是顺序的
+      - **增量同步**：Broker 间同步元数据，可增量同步。（速度快）
+      - 可监控
+
+    - Log 机制， Broker是 Consumer，从 Controller 拉取元数据，维护自己的消费offset。
+    - 元数据 Topic 不能复用现有的副本机制，因为副本是由Controller管理的。（蛋生鸡）
+
+  -  Controller quorum: 一组Controller组成Raft，只有一个Leader
+
+    <img src="0JavaSummary.assets/image-20210722094249643.png" alt="image-20210722094249643" style="zoom:33%;" />
+
+    - 与ZAB不同，Leader负责读写请求
+    - 好处：切换Controller低延时，元数据可以缓存磁盘。
 
 ### 副本
 
@@ -1678,6 +1707,29 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
   * 避免不一致性
   * 场景不适用，分离适用读负载很大
   * 同步机制，Follower存在落后Leader的时间窗口，若Follower可读，须容忍消息滞后
+  
+* **网络分区如何解决，分情况**
+
+  * 单个 Broker 隔离
+
+    * Controller自动移除它，一致性C保证
+
+  * Broker间不通
+
+    * 副本备份出问题，ISR被收缩，一致性C保证
+
+  * 所有Broker 与 ZooKeeper 不通
+
+    * Broker进入Zoobie，一致性bug，解决方法： **fencing**，比如 Leader Epoch
+
+  * **某个Broker 与 Controller 不通**
+
+    * **元数据不一致**，无法感知到。因为Broker 是否活着完全是交由 ZooKeeper 。一旦某个 Broker 与 ZooKeeper 可通信，集群认为是正常的。（raft可以解决）
+    * 解决方法：强制Controller重选举
+    * 需考虑的问题：加载ZK的元数据很慢，200W的partition需要2分钟。
+    * 怎么解决性能问题？参考：移除Zookeeper
+
+    
 
 ### 调优
 
@@ -1748,7 +1800,6 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 - hi：硬中断消耗时间
 - **si：软中断消耗时间**（高，网卡中断到某个CPU，巨大网络流量，造成网卡的数据包收发出现延迟。解决：网卡binding到多CPU）
 - st：虚拟机偷取时间
-  
 
 ### 进程线程
 
