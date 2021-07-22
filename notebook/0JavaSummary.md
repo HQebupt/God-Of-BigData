@@ -1410,7 +1410,6 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
     - 连接Coordinator（Consumer发起）-- 一直被复用
     - 连接分区副本的leader（Consumer发起）---一直被复用
     - TCP生命周期，默认9分钟
-
 - ConsumerGroup是什么
   - 官网，可扩展、容错性的消费者机制
   - 多个Consumer实例。订阅主题，共同消费。某个挂掉，rebalance。
@@ -1418,11 +1417,29 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - 每个消息在partition的唯一ID
 - __consumer_offsets
   - 注册消费者以及保存位移值，GroupCoordinator管理、读写
-- 采用单线程来获取消息
+- 源码如何设计：采用单线程来获取消息
   - 双线程
     - 负责获取消息
     - 心跳线程。规避因消息处理速度慢而下线，引发rebalance。
   - 异步非阻塞，适合流式
+- 保证消费的时序性？
+  - 难以保证的原因：
+    - Producer是多台机器，没有统一的分布式时钟
+    - Consumer是多台机器，无法保证不同Consumer的消费顺序
+    - 消息重传
+    - Topic Partition是多分区
+  - 全局有序和局部有序：单一分区有序
+    - Kafka的Producer "max.in.flight.requests.per.connection=1"
+    - hash分发到同一个分区
+  - 业务保证顺序的方法
+    - 以Producer、Consumer端发送时间戳为准
+    - 发送消息时，采用唯一自增ID
+    - 缓存时间戳，发送时，给缓存放入时间戳；消费时，去缓存查询是否是最新的
+- 不重复消费的方法
+  - Kafka端，保证生产是幂等的，消费也开启幂等
+  - 业务端，幂等性设计
+    - 全局分布式ID，消费完，就放入到缓存，代表数据已经被消费
+    - 数据库去重，比如订单ID和时间戳作为索引
 
 ### Rebalance&Coordinator
 
@@ -1702,7 +1719,7 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
     - 写消息，解压缩校验
     - 读消息。可以sendfile
 
-* 不支持读写分离
+* 一致性怎么保证的？不支持读写分离
 
   * 避免不一致性
   * 场景不适用，分离适用读负载很大
