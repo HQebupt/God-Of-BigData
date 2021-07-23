@@ -1309,6 +1309,77 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - controller负责全局meta信息维护，管理Broker上下线、topic管理、管理分区副本分配、leader选举、管理所有副本状态机和分区状态机；通过zookeeper实现选举
   - leader和follower是partition级别，leader提供读写，follower同步
 
+### HW Leader Epoch
+
+- **HW**：高水位值（High watermark）,消费者可见，ISR中最小的LEO。
+- LEO:Log End Offset。日志末端位移
+- HW作用：HW和LEO共同完成副本同步
+
+![image-20210723144505788](0JavaSummary.assets/image-20210723144505788.png)
+
+- HW缺陷
+  - Leader 副本高水位更新和 Follower 副本高水位更新在时间上是存在错配的。这种错配是很多“数据丢失”或“数据不一致”问题的根源。
+
+- Follower和Leader副本的HW和LEO是如何被更新的？ 
+
+  - Leader和Follower副本的HW和LEO存储在哪里
+
+    <img src="0JavaSummary.assets/image-20210723144936923.png" alt="image-20210723144936923" style="zoom:50%;" />
+
+  - 更新时机是什么？Broker0是Leader，1是Follower
+
+    
+
+  ![image-20210723145016603](0JavaSummary.assets/image-20210723145016603.png)
+
+- 简述其流程
+
+  - **Leader 副本**写消息
+
+    1. 写入消息到本地磁盘，更新自己的LEO。
+    2. 更新分区高水位值。
+       i. 获取 本地远程副本 LEO 值{LEO-1，LEO-2，……，LEO-n}。
+       ii. 获取 Leader 副本高水位值：currentHW。
+       iii. 取他们的最小值
+
+  - Follower 拉取消息
+
+    - 读取磁盘（或页缓存）中的消息数据。
+    - 使用 Follower 副本发送请求中的位移值更新远程副本 LEO 值。
+    - 更新分区高水位值（具体步骤与处理生产者请求的步骤相同）。
+
+  - **Follower 副本**
+
+    从 Leader 拉取消息的处理逻辑如下：
+
+    1. 写入消息到本地磁盘。
+    2. 更新 LEO 值。
+    3. 更新高水位值。
+       i. 获取 Leader 发送的高水位值：currentHW。
+       ii. 获取步骤 2 中更新过的 LEO 值：currentLEO。
+       iii. 更新高水位为 min(currentHW, currentLEO)。
+
+1. Leader Epoch引入解决的问题是什么？Leader 副本和Follower副本高水位的更新时间上会出现什么问题？
+
+   1. 为什么？
+
+   2. 是什么？Leader Epoch是一种机制，一种概念。分为2个部分
+
+      - Epoch。一个单调增加的版本号。每当副本领导权发生变更时，都会增加该版本号。小版本号的 Leader 被认为是过期 Leader，不能再行使 Leader 权力。
+
+      - 起始位移（Start Offset）。Leader 副本在该 Epoch 值上写入的首条消息的位移。
+      - **每个分区都缓存 Leader Epoch 数据**，同时它还会定期地将这些信息持久化到一个 checkpoint 文件中
+
+   3. 做什么？
+
+   4. 场景1：前提是**Broker 端参数 min.insync.replicas 设置为 1**， 2台Broker同时宕机，原来低水位的Broker B先启动起来，kafka将它设置为leader，当以前的Leader的broker A 启动起来的时候，发现现在的HW是1，那么就截断自己的日志。那么这些被截断的日志就属于丢失的日志
+
+   5. 场景2：前提是一样的，2台Broker同时宕机，Broker A的HW = 2， Broker B的HW =1 ,还是Broker B先启动起来，它自然成为leader，然后它接受了一条生产消息，HW==> 2， 那么这个时候Broker A活过来了，它发现自己的HW和现在的leader的HW是一样的，那么就不会拉取消息。其实他们的第2条消息是不一致的，所以出现了消息不一致的情况。
+
+   6. Leader Epoch 如何解决case 1 和 case 2。每次活过来的follower去Leader拉取Leader的LEO值，以这个值来作为判断是否做同步的标准。
+
+
+
 ### 无消息丢失
 
 从Producer应该做什么，Broker做什么，Consumer做什么来分析？
@@ -1440,6 +1511,12 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - 业务端，幂等性设计
     - 全局分布式ID，消费完，就放入到缓存，代表数据已经被消费
     - 数据库去重，比如订单ID和时间戳作为索引
+- 监控Consumer消费进度
+  - Consumer Lag: 消费者落后生产者的条数，理想情况要等于0
+    - 如果太大，要消费的数据就不在页缓存，丢失Zero-Copy
+  - Lead：records-lag-max 和 records-lead-min
+    - 最新消费消息的Offset与分区最老的Offset差值
+    - 如果接近0，意味着一直在消息最老的消息，丢失消息
 
 ### Rebalance&Coordinator
 
@@ -1665,22 +1742,33 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 
 ### 副本
 
+- 作用：冗余（无横向扩展、无数据局部性访问特性）
+
 - Leader 和 Follower 区别
   - Leader读写
   - Follower PULL同步数据（2.4 ，可读）
   
+- ISR(In Sync Replica)
+
+  - 保持与Leader同步的副本。（lag=10s）
+
+  1. ACK=all，ISR数据同步，回复ack
+  2. ACK=all，只有当ISR的大小大于最小的ISR集合，才能写成功。（**一致性和可用性的折衷，交给用户来决定**）
+
 -  Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一致性
   - 高水位机制（无法保证 Leader 连续变更场景下的数据一致性）
   - Leader Epoch 机制
   
 - Leader 选举
+
   - 思想：从 AR 中挑选首个在 ISR 中的副本，作为新 Leader
+  - 是否开启unclean选举
   - 一种场景，一种选举策略。
-  - OfflinePartition: 分区上下线
-  - ReassignPartition：手动kafka-reassign-partitions 
-  - PreferredReplicaPartition ：手动kafka-preferred-replica-election
-  - ControlledShutdownPartition ：Broker 正常关闭
-  
+    - OfflinePartition: 分区上下线
+    - ReassignPartition：手动kafka-reassign-partitions 
+    - PreferredReplicaPartition ：手动kafka-preferred-replica-election
+    - ControlledShutdownPartition ：Broker 正常关闭
+
 - 同步的完整流程
 
   - Follower 发送 FETCH 请求给 Leader
@@ -1785,12 +1873,35 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 
 ### Pulsar
 
-- 与Kafka的不同
+- 与Kafka的不同：存储计算分离
+
   - Broker Stateless，无状态
+    - Broker与分区对应是动态调整的
   - ZK存储元数据，和Kafka一样
   - Bookeeper，分布式存储集群，存储消息
     - Ledger，是Write Ahead Log，类似于Segment，但是是一次性写入（解决并发写入控制，不需要分布式锁，不需要损失性能）
+
 - <img src="0JavaSummary.assets/image-20210723104938142.png" alt="image-20210723104938142" style="zoom: 80%;" />
+
+- 客户端如何读写消息
+
+  - 连接Service Discovery，获取分区与Broker的元数据信息
+  - 连接对应的Broker
+
+- 存储分离优点
+
+  - 复杂度降低
+  - 计算节点无状态，扩展、故障转移快
+  - 计算节点：只关注业务逻辑，调度灵活
+  - 存储节点：只关注存储
+
+- 存储分离缺点
+
+  - BookKeeper 依然要解决数据一致性、节点故障转移、选举、数据复制等等这些问题
+  - 单集群变多集群，运维复杂
+  - 性能损失，比如消费一条消息，Broker需要从Bookeeper读取，多了网络IO和内存拷贝
+
+  
 
 ## Linux 
 
