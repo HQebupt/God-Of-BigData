@@ -1782,11 +1782,19 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
   bin/kafka-server-start.sh config/server.properties
   ```
 
-  
+
+### Pulsar
+
+- 与Kafka的不同
+  - Broker Stateless，无状态
+  - ZK存储元数据，和Kafka一样
+  - Bookeeper，分布式存储集群，存储消息
+    - Ledger，是Write Ahead Log，类似于Segment，但是是一次性写入（解决并发写入控制，不需要分布式锁，不需要损失性能）
+- <img src="0JavaSummary.assets/image-20210723104938142.png" alt="image-20210723104938142" style="zoom: 80%;" />
 
 ## Linux 
 
-![image-20210720222748204](0JavaSummary.assets/image-20210720222748204.png)
+<img src="0JavaSummary.assets/image-20210720222748204.png" alt="image-20210720222748204" style="zoom:33%;" />
 
 - 内核：特殊程序，控制所有硬件资源，如CPU、内存
 - 用户态：应用程序运行的空间
@@ -1857,11 +1865,11 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 
 使用三次握手和 `RST` 控制消息将是否建立连接的最终控制权交给了发送方，因为只有发送方有足够的上下文来判断当前连接是否是错误的或者过期的，这也是 TCP 使用三次握手建立连接的最主要原因。
 
-![image-20210720194136145](0JavaSummary.assets/image-20210720194136145.png)
+<img src="0JavaSummary.assets/image-20210720194136145.png" alt="image-20210720194136145" style="zoom:50%;" />
 
 如下图所示，通信双方的两个 `TCP A/B` 分别向对方发送 `SYN` 和 `ACK` 控制消息，等待通信双方都获取到了自己期望的初始化序列号之后就可以开始通信了，由于 TCP 消息头的设计，我们可以将中间的两次通信合成一个，`TCP B` 可以向 `TCP A` 同时发送 `ACK` 和 `SYN` 控制消息，这也就帮助我们将四次通信减少至三次。
 
-![image-20210720194216009](0JavaSummary.assets/image-20210720194216009.png)
+<img src="0JavaSummary.assets/image-20210720194216009.png" alt="image-20210720194216009" style="zoom:50%;" />
 
 > 为什么DNS查询使用UDP协议？盲猜：历史原因，数据包小，tcp连接消耗太大。不同的实现场景可以用TCP来实现DNS查询。
 
@@ -1890,7 +1898,7 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 
 <img src="0JavaSummary.assets/image-20210720194543855.png" alt="image-20210720194543855" style="zoom:50%;" />
 
-![image-20210720194607367](0JavaSummary.assets/image-20210720194607367.png)
+<img src="0JavaSummary.assets/image-20210720194607367.png" alt="image-20210720194607367" style="zoom:50%;" />
 
 参考：[为什么 TCP 协议有 TIME_WAIT 状态](https://draveness.me/whys-the-design-tcp-time-wait/)
 
