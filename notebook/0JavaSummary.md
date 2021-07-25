@@ -1670,7 +1670,7 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
   - 异步发送给其他 Broker
   - 前面2步有时间差，导致Clients 访问的元数据不一定最新。（raft能解决吗）
 
-### Broker处理请求流程
+### Broker流程
 
 ![image-20210702154239238](0JavaSummary.assets/image-20210702154239238-5211760.png)
 
@@ -1843,8 +1843,149 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
      * Producer 端：增加 batch.size、linger.ms，启用压缩，关闭重试等。
      * Broker 端：增加 num.replica.fetchers，提升 Follower 同步 TPS，避免 Broker Full GC 等。
      * Consumer：增加 fetch.min.bytes 等
-* 处理请求区分优先级
-  * 开启数据和控制类请求区分
+
+#### 1请求处理不及时
+
+- Sina案例：RequestQueueTimeMs：3台broker高
+  - RequestQueueTimeMs：Request 在 队列中的平均等候时间，单位是毫秒。等待时间过长，增加 I/O 线程的数量，加快队列的消费速度。
+- 分析：热点topic，
+- 解决：
+  - 思路：
+    - 应对突发流量，流量开始激增的时候，通过监控拿到这个指标，临时加大IO线程数。
+  - 增加io线程数，加倍8，临时加大处理能力
+  - 增加主题分区
+
+
+
+- EMC案例1：单分区2个副本的UUT主题， Broker A是 Leader，Broker B是follower。运行正常。后来新来了10台同类型的UUT，这10台UUT被同时调度在同一个时刻，进行测试，导致写日志流量激增。导致 Broker A 瞬间积压了大量的未处理 PRODUCE 请求。同事执行了 Preferred Leader 选举，将 Broker B 变成Leader。
+  - 日志中出现了Broker A抛出的超时异常，Producer程序异常，失败。
+- 分析：Producer的配置ack = all，Request TotalTimeMs： 3s
+  - Leader/Follower 转换，未完成的 PRODUCE 请求会一直保存在 Broker A 上的 Purgatory 缓存，不断重试，超时异常，无法完成副本间同步。
+
+- 解决Broker端：
+  - 增加io线程数，临时加大处理能力
+  - 增加主题分区
+
+####   Producer 程序发送消息延时高
+
+- 案例：某些topic的Producer的延迟在ack=all的情况下特别高，RemoteTimeMs达到了1s以上，
+- 分析：
+  - RemoteTimeMs ：等待其他 Broker 完成指定逻辑的时间
+  - acks=all，PRODUCE 请求等待ISR完成
+  - TotalTimeMs：计算 Request 被处理的完整流程时间。
+- 解决：
+  - 副本broker ping延迟查过了500ms，网络交换机出现了问题，更换交换机
+
+
+
+#### 3 Server处理请求区分优先级
+
+- 案例2：发现删除topic比较慢。怎么分析？
+- 分析：删除topic，Controller向Partition leader broker发送 StopRelica请求。
+  - 没有被及时处理，操作hang。
+  - 数据类和控制类请求不做区分，生产者消息大量积压的broker操作慢。
+
+- 解决：开启数据和控制类请求区分
+  - 1个Acceptor，1个Processor，RequestQueue 20
+
+```java
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNA
+listeners=CONTROLLER://192.1.1.8:9091,INTERNAL://192.1.1.8:9092,EXTERNAL://10.1
+control.plane.listener.name=CONTROLLER
+```
+
+<img src="0JavaSummary.assets/image-20210702184411993.png" alt="image-20210702184411993" style="zoom:50%;" />
+
+
+
+#### 4 分区的 Leader 显示是 -1
+
+- 案例：某些Topic 的Partition Leader 显示是 -1。
+  - offlinePartitionCount**该字段统计集群中所有离线或处于不可用状态的主题分区数量**
+
+- 分析：Leader 所在的 Broker 因为负载高宕机， 重启后，Controller 无法分区选举 Leader，因此，“不可用”。
+  -  Broker 都在实时监听 ZooKeeper  /controller 节点
+
+    - **监听这个节点是否存在**。不存在，抢着创建 /controller 节点
+
+    - **监听这个节点数据是否发生了变更**。Controller 选举。
+
+- 解决：手动删除了 /controller 。源码中的 **ControllerZNode.path** 上，也就是 ZooKeeper 的 /controller 节点。
+
+```java
+// zookeeper 上Controller的临时节点的内容
+{"version":1,"brokerid":0,"timestamp":"1585098432431"} // 序号为 0 的 Broker 是集群 Controller。
+cZxid = 0x1a
+ctime = Wed Mar 25 09:07:12 CST 2020
+mZxid = 0x1a
+mtime = Wed Mar 25 09:07:12 CST 2020
+pZxid = 0x1a
+cversion = 0
+dataVersion = 0
+aclVersion = 0
+ephemeralOwner = 0x100002d3a1f0000 // 字段不是 0x0，说明这是一个临时节点。
+dataLength = 54
+numChildren = 0
+```
+
+
+
+#### 5 创建Topic，某些Broker不知
+
+- 案例：Kafka 0.10.0.1创建了主题后，有些 Broker 依然无法感知到。
+- 分析：元数据变更无法在集群的所有 Broker 上同步，Controller问题
+  - UpdateMetadataRequest：更新 Broker 上的元数据缓存。集群上的所有元数据变更，都首先发生在 Controller 端，然后再经由这个请求广播给集群上的所有 Broker。
+  - Controller Broker 本身承载着非常重的业务，负载过大，请求积压，造成元数据更新滞后
+  - 怀疑是Controller 端的请求积压
+
+- 解决：
+  - 源码中新加了一个监控指标，用于实时监控 Controller 的请求队列长度。（**源码是RequestChannel的RequestQueue**），定位了问题。（0.11添加了队列长度和Request在Channel的等待时间`Request Queue Size: kafka.network:type=RequestChannel,name=RequestQueueSize`
+  - 迁移Controller到低负载
+
+#### 6 Broker 节点的内存占用高(TODO)
+
+- 案例：Broker 上的副本数过多，Broker 内存占用高。
+- 分析：HeapDump ，
+- 我们发现根源在于 ReplicaFetcherThread 文件中的 buildFetch 方法。
+- 实例化一个 LinkedHashMap。如果分区数很多的话，这个 Map 会被扩容很多次，因此带来了很多不必要的数据拷贝。这样既增加了内存占用，也浪费了 CPU 资源。（初始化16）
+- 2.2.0 2019.5 发布，6月2.3.0，fix version: 2.5.0 （April 16, 2020）
+
+```scala
+val builder = fetchSessionHandler.newBuilder()
+
+// 改进后
+    /** A builder that allows for presizing the PartitionData hashmap, and avoiding making a
+     *  secondary copy of the sessionPartitions, in cases where this is not necessarily.
+     *  This builder is primarily for use by the Replica Fetcher
+     * @param size the initial size of the PartitionData hashmap
+     * @param copySessionPartitions boolean denoting whether the builder should make a deep copy of
+     *                              session partitions
+     */
+val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
+```
+
+```scala
+val builder = fetchSessionHandler.newBuilder()
+
+// 改进后
+    /** A builder that allows for presizing the PartitionData hashmap, and avoiding making a
+     *  secondary copy of the sessionPartitions, in cases where this is not necessarily.
+     *  This builder is primarily for use by the Replica Fetcher
+     * @param size the initial size of the PartitionData hashmap
+     * @param copySessionPartitions boolean denoting whether the builder should make a deep copy of
+     *                              session partitions
+     */
+val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
+```
+
+- 背景：Our current follower replica fetching logic has huge CPU cost with num.partitions to fetch from, and it scales non-linearly as well. There are a bunch of optimizations we can consider to try to reduce its cost and hopefully make it to be linear against the num.partitions.
+- PR: Fetch session optimizations (mostly presizing the next hashmap, and avoiding making a copy of sessionPartitions, as a deep copy is not required for the ReplicaFetcher)
+
+> [KAFKA-9039: Optimize ReplicaFetcher fetch path](https://github.com/apache/kafka/pull/7443#)
+
+
+
+
 
 ### 实际操作
 
