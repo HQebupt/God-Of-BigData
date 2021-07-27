@@ -2485,6 +2485,8 @@ Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一
 
   
 
+- 
+
 ### 无消息丢失
 
 - Broker
@@ -2618,6 +2620,35 @@ Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一
     2. 记录一些状态信息以保证幂等性，比如：每个 topic-partition 对应的下一个 sequence numbers 和 last acked batch（最近一个已经确认的 batch）的最大的 sequence number 等；
     3. 记录 ProducerIdAndEpoch 信息（PID 信息）。
 
+#### 分区策略
+
+实现负载均衡，高伸缩性，高吞吐量。
+
+**如何自定义分区策略有哪些？**
+
+编写一个具体的类实现`org.apache.kafka.clients.producer.Partitioner`接口
+
+```java
+int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster);
+```
+
+- 轮询策略：Producer API默认分区策略。很优秀，很常见。
+
+- 随机策略：
+
+- 消息键保序：Key-ordering，Kafka运行为每条消息定义key。在kafka不支持时间戳的时候，这个key放时间戳；后来，这个key可以保证某些消息进入到同一个分区，这个相当重要，有很多用途。
+
+  ```java
+  List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+  return Math.abs(key.hashCode()) % partitions.size();
+  ```
+
+  > Kafka 默认情况下，Producer没有指定key，就用轮询策略；如果指定了，就用key-ordering.
+
+- 黏性分区器（Sticky Partitioner）是选择单个分区发送所有无Key的消息。一旦这个分区的batch已满或处于“已完成”状态，黏性分区器会随机地选择另一个分区并会尽可能地坚持使用该分区——像黏住这个分区一样
+
+- 在大规模集群中，还有一种基于地理位置的分区策略。
+
 ### Consumer
 
 - Consumer的TCP连接
@@ -2681,7 +2712,7 @@ Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一
   
 - 策略，由Coordinator定
   - 轮询
-  - StickyAssignor，粘性策略
+  - StickyAssignor，粘性策略，尽可能地保留之前的分配方案，尽量达到分区分配的最小变动
 
 #### 如何避免计划外Rebalance？
 
