@@ -442,6 +442,759 @@ PhantomReference pr = new PhantomReference(str, queue);
 
     
 
+## 2 Java锁
+
+![img](0JavaSummary.assets/7f749fc8.png)
+
+### 1. 乐观锁 VS 悲观锁
+
+- 悲观锁：取数据的时候会先加锁。（synchronized和lock实现）
+
+  - 适用场景：写操作多。
+
+- 乐观锁：不会添加锁，只是在更新数据的时候去判断之前有没有别的线程更新了这个数据。
+
+  - 若没有，就更新。
+  - 若有，则取决于具体实现
+
+  * 最常实现是CAS算法，Java原子类中的递增操作就通过CAS自旋实现的。
+  * 适用场景：读操作多。
+
+#### CAS
+
+CAS算法，三个操作数：
+
+- 需要读写的内存值 V。
+- 更新前，获取内存值 A。
+- 要写入的新值 B。（只有当V==A的时候，才会进行更新）
+
+```java
+// ------------------------- JDK 8 -------------------------
+// AtomicInteger 
+// setup to use Unsafe.compareAndSwapInt for updates
+private static final Unsafe unsafe = Unsafe.getUnsafe(); // 操作内存的类
+private static final long valueOffset; // 存储value在AtomicInteger中的偏移量。
+private volatile int value; // 存储实际的值，需要借助volatile关键字保证其在线程间是可见的。
+
+public final int incrementAndGet() {
+  return unsafe.getAndAddInt(this, valueOffset, 1) + 1;
+}
+
+// ------------------------- OpenJDK 8 -------------------------
+// Unsafe.java
+public final int getAndAddInt(Object o, long offset, int delta) {
+   int v;
+   do {
+       v = getIntVolatile(o, offset);
+   } while (!compareAndSwapInt(o, offset, v, v + delta)); // 底层实现是CPU指令CMPXGHG，原子操作。
+   return v;
+}
+```
+
+- ABA 问题的解决：添加版本号，变成1A－2B－3A（AtomicStampedReference）
+- 循环时间长开销大
+- 只能保证一个共享变量的原子操作。(AtomicReference)
+
+### 2. 自旋锁 VS 适应性自旋锁
+
+阻塞或唤醒一个Java线程需要操作系统切换CPU状态来完成，耗费处理器时间。
+
+- 自旋锁：某线程尝试获取同步资源失败后，不放弃CPU时间片，通过自旋等待锁释放。（CAS是原理）
+  - 自旋等待的时间必须要有一定的限度，如果自旋超过了限定次数（默认是10次，可以使用-XX:PreBlockSpin来更改）没有成功获得锁，就应当挂起线程。
+
+- 自适应自旋锁：自旋的次数不在固定，由虚拟机来决定。
+
+  - 如果一个锁，自旋经常成功，那么虚拟机就回给它留多的次数来自旋
+  - 如果一个锁，自旋经常失败，那么虚拟机可能就直接让获取锁变成阻塞，不再采用自旋的方式。
+
+  - JDK 6中变为默认开启，并且引入了自适应的自旋锁（适应性自旋锁）。
+
+### 3. 无锁 VS 偏向锁 VS 轻量级锁 VS 重量级锁
+
+synchronized锁的状态
+
+- synchronized，悲观锁，这把锁就是存在Java对象头里的
+
+  - Mark Word（标记字段）、Klass Pointer（类型指针）。
+  - Mark Word：存储HashCode，分代年龄和锁标志位信息。
+
+#### Monitor
+
+- 同步机制。每一个Java对象都有
+
+- monitor record列表，线程私有的数据结构
+- monitor的Owner字段存放拥有该锁的线程的唯一标识
+
+<img src="0JavaSummary.assets/image-20210610101721136-1623291442906.png" alt="image-20210610101721136" style="zoom: 50%;" />
+
+
+
+**synchronized通过Monitor来实现线程同步，Monitor是依赖于底层的操作系统的Mutex Lock（互斥锁）来实现的线程同步。**
+
+> Mutex Lock实现：CPU指令，swap或exchange指令，是把寄存器和内存单元的数据相交换。
+>
+> ```python
+> lock: 
+> 	if(mutex > 0){ # mutex = 1 表示锁空闲
+> 		mutex = 0;   # mutex = 0 表示锁占用
+> 		return 0; 
+> 	} else 
+> 		挂起等待; 
+> 	goto lock;
+> 
+> unlock: 
+> 	mutex = 1; 
+> 	唤醒等待Mutex的线程; 
+> ```
+>
+> 
+
+因为它依赖于操作系统的互斥锁来实现的。我们称之为“重量级锁“
+
+- 四种锁状态对应的Object对象头
+
+| 锁状态   | 存储内容                                                | 存储内容 |
+| :------- | :------------------------------------------------------ | :------- |
+| 无锁     | 对象的hashCode、对象分代年龄、是否是偏向锁（0）         | 01       |
+| 偏向锁   | 偏向线程ID、偏向时间戳、对象分代年龄、是否是偏向锁（1） | 01       |
+| 轻量级锁 | 指向栈中锁记录的指针                                    | 00       |
+| 重量级锁 | 指向互斥量（重量级锁）的指针                            | 10       |
+
+#### 3.1 无锁
+
+- CAS是无锁的实现
+
+#### 3.2**偏向锁**
+
+**偏向锁是指一段同步代码一直被一个线程所访问，那么该线程会自动获取锁，降低获取锁的代价。**
+
+- 背景：引入偏向锁是为了在无多线程竞争的情况下尽量减少不必要的轻量级锁执行路径，因为轻量级锁的获取及释放依赖多次CAS原子指令，而偏向锁只需要在置换ThreadID的时候依赖一次CAS原子指令即可。
+- 适用场景：在只有一个线程执行同步代码块时能够提高性能。
+- 怎么做到的：当一个线程访问同步代码块并获取锁时，会在Mark Word里存储锁偏向的线程ID。在线程进入和退出同步块时不再通过CAS操作来加锁和解锁，而是检测Mark Word里是否存储着指向当前线程的偏向锁。
+- 什么时候释放：只有遇到其他线程尝试竞争偏向锁时，持有偏向锁的线程才会释放锁，线程不会主动释放偏向锁。（撤销，需要等待全局安全点）
+- 默认开启，如果需要关闭偏向锁：-XX:-UseBiasedLocking=false，关闭之后程序默认会进入轻量级锁状态。
+
+#### 3.3**轻量级锁**
+
+**是指当锁是偏向锁的时候，被另外的线程所访问，偏向锁就会升级为轻量级锁，其他线程会通过自旋的形式尝试获取锁，不会阻塞，从而提高性能。**
+
+#### 3.4 重量级锁
+
+若当锁是轻量级锁的时候，当前只有一个等待线程，则该线程通过自旋进行等待。但是当自旋超过一定的次数，或者一个线程在持有锁，一个在自旋，又有第三个来访时，轻量级锁升级为重量级锁。
+
+#### Synchronized优化
+
+- 无锁：当对象被synchronized修饰，先处于无锁状态，Mark Word没有存储锁信息（无锁没有对资源进行锁定，所有的线程都能访问并修改同一个资源，但同时只有一个线程能修改成功。CAS实现）
+- 偏向锁：当对象被同一个线程访问，把它的Thread ID储存在Mark Word里，进入偏向锁。（这个状态下，线程访问这个对象的时候，不在通过CAS来加锁，直接检测Mark Word的ThreadID值）
+- 轻量级锁：偏向锁时，如果有第二个线程来了，那么锁就升级成轻量级锁。它就会自旋等待第一个线程释放锁。（第一个线程会在全局安全点的时候，才会释放锁）
+- 重量级锁：轻量级锁时，自旋等待时间太长了，或者又有第3个线程来竞争，那么锁升级，阻塞其它线程。
+
+  - 偏向锁通过对比Mark Word解决加锁问题，避免执行CAS操作。
+  - 轻量级锁是通过用CAS操作和自旋来解决加锁问题，避免线程阻塞和唤醒。
+  - 重量级锁是将除了拥有锁的线程以外的线程都阻塞。
+
+### 4. 公平锁 VS 非公平锁
+
+- 公平锁：竞争资源是否需要排队
+- 非公平锁：先尝试插队，失败再排队。
+
+通过ReentrantLock的源码来理解公平锁和非公平锁。
+
+<img src="0JavaSummary.assets/6edea205-1622776296892.png" alt="img" style="zoom: 50%;" />
+
+**ReentrantLock里面有一个内部类Sync，Sync继承AQS（AbstractQueuedSynchronizer）**
+
+公平锁与非公平锁的加锁方法的源码:
+
+<img src="0JavaSummary.assets/bc6fe583.png" alt="img" style="zoom:50%;" />
+
+- hasQueuedPredecessors()：主要是判断当前线程是否位于同步队列中的第一个
+
+#### 4.1 **AbstractQueuedSynchronizer**
+
+- **基于原子变量 state 和 queue 实现的同步框架，state == 1 表示锁已被抢占，state ==0 表示空闲**
+
+```java
+    /**
+     * The synchronization state.
+     */
+    private volatile int state;
+```
+
+<img src="0JavaSummary.assets/image-20210604145049525-1622789451026.png" alt="image-20210604145049525" style="zoom:67%;" />
+
+- 核心方法
+  - tryAquire()、tryRelease()
+  - tryAcquireShared()、tryReleaseShared()
+  - isHeldExclusively()
+  - getState()、setState()、compareAndSetState()
+- 核心成员变量
+  - state
+  - head
+  - tail
+- Node 成员变量
+
+```
+    int waitStatus;
+    Node prev;
+    Node next;
+    Thread thread;
+    Node nextWaiter;
+```
+
+- waitStatus 用于标识等待队列中 Node 的状态（这样的设计不仅在于用于标识需要挂起的线程，同时也避免了出现异常而退出或者被取消的线程占据队列空间导致其他等待线程饥饿）
+  - SIGNAL = -1 // 表示后继节点当前被阻塞（或即将被阻塞），需前驱节点释放时解除这个后继几点的阻塞
+  - CANCELLED = 1
+  - CONDIGION = -2
+  - PROPAGATE = -3 // 用于公平锁
+
+```
+    volatile int waitStatus;
+```
+
+- **AQS 父类(AbstractOwnableSynchronizer)用于记录当前获得锁的线程**
+  - setExclusiveOwnerThread()
+  - getExclusiveOwnerThread()
+- 虽然 AQS 基于内部内部 FIFO 队列, 但是它获取锁的策略不一定是FIFO的，一个排他锁的核心形式如下: 先尝试获取锁，不成功再入队。
+
+```java
+    Acquire:
+       while (!tryAcquire(arg)) {
+          enqueue thread if it is not already queued;
+          possibly block current thread;
+       }
+
+    Release:
+       if (tryRelease(arg))
+          unblock the first queued thread;
+```
+
+#### 4.2 ReentrantLock 原理
+
+- 基于 AQS ，初次竞争使用 CAS 将 status 置为 1，若成功则抢到锁，再将独占线程置为自身（因此在竞争不频繁时效率很高）
+
+```java
+ public void lock() {
+    	sync.lock();
+    }
+
+    static final class NonfairSync extends Sync {
+    	...
+
+        final void lock() {
+            if (compareAndSetState(0, 1))
+                setExclusiveOwnerThread(Thread.currentThread());
+            else
+                acquire(1);
+            }
+        }
+        ...
+    }
+```
+
+- 以上 CAS 失败则调用 AQS.acquire()，在分支中又会调用 tryAcquire，
+  - 如果调用的是 NonFairAcquire
+    - tryAcquire 判断当前 status
+    - 若为 0 则尝试用 CAS 置 status 为 1
+    - CAS 失败则判断是否为当前线程重入该锁，是则获得锁，否则加入等待队列
+  - 如果调用的是 FairAcquire
+    - 逻辑与 NonFairAcquire 一致，只是在抢锁前线判断等待队列是否为空
+
+```java
+// in AbstractQueuedSynchronizer
+    public final void acquire(int arg) {
+        if (!tryAcquire(arg) &&
+            acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+            selfInterrupt();
+    }
+
+    // in NotfairSync
+    protected final boolean tryAcquire(int acquires) {
+        return nonfairTryAcquire(acquires);
+    }
+
+    // in Sync
+    final boolean nonfairTryAcquire(int acquires) {
+        final Thread current = Thread.currentThread();
+        int c = getState();
+        if (c == 0) {
+            if (compareAndSetState(0, acquires)) {
+                setExclusiveOwnerThread(current);
+                return true;
+            }
+        }
+        else if (current == getExclusiveOwnerThread()) { // 可重入判断
+            int nextc = c + acquires;
+            if (nextc < 0) // overflow
+                throw new Error("Maximum lock count exceeded");
+            setState(nextc);
+            return true;
+        }
+        return false;
+    }
+
+    // FairSync
+    protected final boolean tryAcquire(int acquires) {
+        final Thread current = Thread.currentThread();
+        int c = getState();
+        if (c == 0) {
+            if (!hasQueuedPredecessors() && // 检查队列是否有等待线程
+                compareAndSetState(0, acquires)) {
+                setExclusiveOwnerThread(current);
+                return true;
+            }
+        }
+        else if (current == getExclusiveOwnerThread()) {
+            int nextc = c + acquires;
+            if (nextc < 0)
+                throw new Error("Maximum lock count exceeded");
+            setState(nextc);
+            return true;
+        }
+        return false;
+    }
+```
+
+- 如果tryAcquire失败了，就会把线程入队。若队列未初始化，则初始化头结点（thread=null, waitstatus=0），然后添加到队列尾；然后开始进入 acquireQueued 中的 循环 ①
+
+```java
+	private Node addWaiter(Node mode) {
+        Node node = new Node(Thread.currentThread(), mode);
+        // Try the fast path of enq; backup to full enq on failure
+        Node pred = tail;
+        if (pred != null) {
+            node.prev = pred;
+            if (compareAndSetTail(pred, node)) {
+                pred.next = node;
+                return node;
+            }
+        }
+        enq(node); // 入队
+        return node;
+    }
+
+    private Node enq(final Node node) {
+        for (;;) {
+            Node t = tail;
+            if (t == null) { // Must initialize
+                if (compareAndSetHead(new Node()))
+                    tail = head;
+            } else {
+                node.prev = t;
+                if (compareAndSetTail(t, node)) {
+                    t.next = node;
+                    return t;
+            }
+        }
+    }
+
+```
+
+- **进入等待队列之后，还会再次尝试获取锁。**若自身为首节点（head后的第一个节点），则尝试获得锁 tryAcquire，若能获得，则弹出头结点，返回；否则判断当前线程是否应当挂起，如果节点刚被初始化，则前置节点的 waitstatus 为 0，则将 waitstatus 改为 SIGNAL 后，再次进入 外循环 ① 尝试抢锁，失败则再次进入判断是否应当挂起的逻辑，正常情况下，第二次循环如果还没得到锁，就会被挂起
+
+```java
+   final boolean acquireQueued(final Node node, int arg) {
+        boolean failed = true;
+        try {
+            boolean interrupted = false;
+            for (;;) { // 循环①
+                final Node p = node.predecessor();
+                if (p == head && tryAcquire(arg)) {
+                    setHead(node); // node的thread和prev都被置空, head = node
+                    p.next = null; // help GC
+                    failed = false;
+                    return interrupted;
+                }
+                if (shouldParkAfterFailedAcquire(p, node) && // 没有抢到锁就标记自身应当被挂起，等待下次循环再挂起
+                    parkAndCheckInterrupt())
+                    interrupted = true;
+            }
+        } finally {
+            if (failed)
+                cancelAcquire(node);
+        }
+    }
+
+    private void setHead(Node node) {
+        head = node;
+        node.thread = null;
+        node.prev = null;
+    }
+
+    private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
+        int ws = pred.waitStatus;
+        if (ws == Node.SIGNAL)
+            /*
+             * This node has already set status asking a release
+             * to signal it, so it can safely park.
+             */
+            return true;
+        if (ws > 0) {
+            /*
+             * Predecessor was cancelled. Skip over predecessors and
+             * indicate retry.
+             */
+            do {
+                node.prev = pred = pred.prev;
+            } while (pred.waitStatus > 0);
+            pred.next = node;
+        } else {
+            /*
+             * waitStatus must be 0 or PROPAGATE.  Indicate that we
+             * need a signal, but don't park yet.  Caller will need to
+             * retry to make sure it cannot acquire before parking.
+             */
+            compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
+        }
+        return false;
+    }
+
+    private final boolean parkAndCheckInterrupt() {
+        LockSupport.park(this);
+        return Thread.interrupted();
+    }
+
+```
+
+- 下面是release的过程：当获得锁的线程 release 时，会将首节点唤醒，唤醒的首节点会再次进入 循环 ①，执行之前的自旋抢锁的逻辑，此时该节点的线程会和其他新来而未进队列的线程一起竞争锁，因此它并不一定能抢得到，从这个角度来看，它并不比新来的线程更优先，但是比队列中的其他线程都更优先
+
+```java
+	// in AbstractQueuedSynchonizer
+    public final boolean release(int arg) {
+        if (tryRelease(arg)) {
+            Node h = head;
+            if (h != null && h.waitStatus != 0)
+                unparkSuccessor(h);
+            return true;
+        }
+        return false;
+    }
+
+	// in ReentrantLock#Sync
+    protected final boolean tryRelease(int releases) {
+        int c = getState() - releases;
+        if (Thread.currentThread() != getExclusiveOwnerThread())
+            throw new IllegalMonitorStateException();
+        boolean free = false;
+        if (c == 0) {
+            free = true;
+            setExclusiveOwnerThread(null);
+        }
+        setState(c);
+        return free;
+    }
+```
+
+###  5 可重入锁 VS 非可重入锁
+
+可重入锁，是指在同一个线程在外层方法获取锁的时候，再进入该线程的内层方法会自动获取锁（前提锁对象得是同一个对象或者class）
+
+Java中ReentrantLock和synchronized都是可重入锁，一定程度避免死锁。下面用示例代码来进行分析：后面有一张图是ReentrantLock的代码Sync的一部分。
+
+```java
+public class Widget {
+    public synchronized void doSomething() {
+        System.out.println("方法1执行...");
+        doOthers();
+    }
+
+    public synchronized void doOthers() {
+        System.out.println("方法2执行...");
+    }
+}
+```
+
+> ReentrantLock的可重入是通过Sync来实现的，Sync是AQS实现的，获取锁tryAccquire的时候。
+>
+> Synchronized的可重入是怎么实现的？
+
+
+
+![img](0JavaSummary.assets/32536e7a.png)
+
+### 6 独享锁 VS 共享锁
+
+独享锁和共享锁同样是一种概念。
+
+- 独享锁也叫排他锁、互斥锁，是指该锁一次只能被一个线程所持有。如果线程T对数据A加上排它锁后，则其他线程不能再对A加任何类型的锁。获得排它锁的线程即能读数据又能修改数据。**JDK中的synchronized和JUC中Lock的实现类就是互斥锁。**
+
+- 共享锁是指该锁可被多个线程所持有。如果线程T对数据A加上共享锁后，则其他线程只能对A再加共享锁，不能加排它锁。获得共享锁的线程只能读数据，不能修改数据。
+
+ReentrantLock和ReentrantReadWriteLock的源码，独享锁和共享锁都是通过AQS来实现的，通过实现不同的方法，来实现独享或者共享。
+
+下图为ReentrantReadWriteLock的部分源码：
+
+![img](0JavaSummary.assets/762a042b-1622794632079.png)
+
+- ReadWriteLock，实现类 ReentrantReadWriteLock
+
+  - 获取顺序：此类不会将读取者优先或写入者优先强加给锁访问的排序
+    - 非公平模式（默认）：连续竞争的非公平锁可能无限期地推迟一个或多个 reader 或 writer 线程，但吞吐量通常要高于公平锁
+    - 公平模式：线程利用一个近似到达顺序的策略来争夺进入。当释放锁时，可以为等待时间最长的那个 writer 线程分配写入锁，如果有一组 reader 的等待时间大于所有正在等待的 writer 线程，将为该组分配读者锁
+    - 试图获得公平写入锁的非重入的线程将会阻塞，除非读取锁和写入锁都已释放（这意味着没有等待线程）
+  - 排他性
+    - 读读共享，读写互斥，写写互斥
+  - 可重入性
+    - 允许 reader 和 writer 按照 ReentrantLock 的样式重新获取读取锁或写入锁
+    - 在写入线程持有的所有写入锁都已经释放后，才允许重入 reader 使用读取锁
+    - **writer 可以获取读取锁，但 reader 不能获取写入锁（也就是说，在正在读的时候，同一个线程可以进入来进行写操作。这和下面这一点是相关的）**
+  - **锁降级：重入允许从写入锁降级为读取锁**
+    - 先获取写入锁，然后获取读取锁，最后释放写入锁
+    - 但是，从读取锁升级到写入锁是不可能的
+
+  ```java
+  // 实现一个线程安全的可以查的字典数据    
+  class RWDictionary {
+         private final Map<String, Data> m = new TreeMap<String, Data>();
+         private final ReentrantReadWriteLock rwl = new ReentrantReadWriteLock();
+         private final Lock r = rwl.readLock();
+         private final Lock w = rwl.writeLock();
+  
+         public Data get(String key) {
+           r.lock();
+           try { return m.get(key); }
+           finally { r.unlock(); }
+         }
+         public String[] allKeys() {
+           r.lock();
+           try { return m.keySet().toArray(); }
+           finally { r.unlock(); }
+         }
+         public Data put(String key, Data value) {
+           w.lock();
+           try { return m.put(key, value); }
+           finally { w.unlock(); }
+         }
+         public void clear() {
+           w.lock();
+           try { m.clear(); }
+           finally { w.unlock(); }
+         }
+      }
+  ```
+
+那读锁和写锁的具体加锁方式有什么区别呢？在了解源码之前我们需要回顾一下其他知识。 在最开始提及AQS的时候我们也提到了state字段（int类型，32位），该字段用来描述有多少线程获持有锁。
+
+在独享锁中这个值通常是0或者1（如果是重入锁的话state值就是重入的次数），在共享锁中state就是持有锁的数量。但是在ReentrantReadWriteLock中有读、写两把锁，所以需要在一个整型变量state上分别描述读锁和写锁的数量（或者也可以叫状态）。于是将state变量“按位切割”切分成了两个部分，高16位表示读锁状态（读锁个数），低16位表示写锁状态（写锁个数）。如下图所示：
+
+![img](0JavaSummary.assets/8793e00a-1622796205188.png)
+
+了解了概念之后我们再来看代码，先看写锁的加锁源码：
+
+```Java
+        final boolean tryWriteLock() {
+            Thread current = Thread.currentThread();
+            int c = getState();
+            if (c != 0) {
+                int w = exclusiveCount(c);// 当前写锁的个数w
+                if (w == 0 || current != getExclusiveOwnerThread()) // 读写互斥
+                    return false;
+                if (w == MAX_COUNT)
+                    throw new Error("Maximum lock count exceeded");
+            }
+            if (!compareAndSetState(c, c + 1))
+                return false;
+            setExclusiveOwnerThread(current);
+            return true;
+        }
+```
+
+读锁源码
+
+```java
+		final boolean tryReadLock() {
+            Thread current = Thread.currentThread();
+            for (;;) {
+                int c = getState();
+                if (exclusiveCount(c) != 0 &&
+                    getExclusiveOwnerThread() != current) // 可重入判断
+                    return false;
+                int r = sharedCount(c);
+                if (r == MAX_COUNT)
+                    throw new Error("Maximum lock count exceeded");
+                if (compareAndSetState(c, c + SHARED_UNIT)) {
+                    if (r == 0) {
+                        firstReader = current;
+                        firstReaderHoldCount = 1;
+                    } else if (firstReader == current) {
+                        firstReaderHoldCount++;
+                    } else {
+                        HoldCounter rh = cachedHoldCounter;
+                        if (rh == null || rh.tid != getThreadId(current))
+                            cachedHoldCounter = rh = readHolds.get();
+                        else if (rh.count == 0)
+                            readHolds.set(rh);
+                        rh.count++;
+                    }
+                    return true;
+                }
+            }
+        }
+```
+
+> 反向思考：ReentrantLock里面的公平锁和非公平锁获取的时候，`tryAcquire` `nonfairTryAcquire` 他们是独占锁还是共享锁？
+
+Refer:[Java锁事](https://tech.meituan.com/2018/11/15/java-lock.html)
+
+### 7 信号量Semaphore
+
+操作系统的信号量是一种概念，Java的信号量是一种实现。
+
+- **信号量是一个被线程共享的非负变量。是一个发信号的机制。**一个等待一个信号量的线程可以被其他线程通知（signal）。这个机制通过 wait 和 signal 两个原子操作（atomic operations）来实现进程同步。
+
+- 互斥锁，Mutex，Mutual Exclusion Object，**互斥锁是一个互斥对象。它是一种特殊的二进位信号量（binary semaphore）**，用来控制访问共享区域资源。
+
+  
+
+
+#### 信号量和互斥锁的不同点
+
+| 参数     | 信号量                                                       | 互斥锁                                                       |
+| -------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| 机制     | **是一种发信号的机制（signaling mechanism）**                | **是一种锁机制**                                             |
+| 数据类型 | **信号量是一个整型变量**                                     | **斥锁是一个对象**                                           |
+| 修改     | 等待（wait）和发信号（signal）操作可以修改信号量             | 互斥锁只有当进程请求访问一块资源或释放占用某块资源的时候被修改 |
+| 资源管理 | 如果没有空闲资源，此时请求资源的进程将执行等待操作（wait operation）。它将一直等待直到信号量的计数大于0 | 如果互斥锁是锁住的状态，进程只能等待。进程将被置于队列中进行排队。只有当互斥锁被解锁后才能访问资源 |
+| 线程     | 可以拥有多个线程                                             | 可以拥有多个线程，但是多个线程不是同时进行的                 |
+| 所有权   | 任一进程释放或者获取资源时，计数将被改变                     | 锁对象只能被当前获取到钥匙的进程释放（即工作线程）           |
+| 类型     | 信号量有两种类型，二进位信号量和计数信号量                   | 互斥锁没有子类型                                             |
+| 操作     | 信号量的值可以通过等待和发信号两个操作来修改                 | 互斥锁有锁上（locked）和解锁（unlocked）两个操作             |
+| 资源占用 | 如果所有资源都被占用，此时请求资源的进程将执行wait（）操作并阻塞自身，直到信号量计数>1，占有被释放的资源 | 如果对象已被锁定，则请求资源的进程将等待，并在释放锁定之前由系统进行排队 |
+| 优缺点   | 信号量可以灵活管理资源；缺点是编程复杂，容易出现死锁。       |                                                              |
+
+Refer [雨幻逐光](https://www.jianshu.com/p/5852efef0ea8)
+
+```java
+/*A counting semaphore. Conceptually, a semaphore maintains a set of permits. Each acquire blocks if necessary until a permit is available, and then takes it. Each release adds a permit, potentially releasing a blocking acquirer. However, no actual permit objects are used; the Semaphore just keeps a count of the number available and acts accordingly.
+Semaphores are often used to restrict the number of threads than can access some (physical or logical) resource. For example, here is a class that uses a semaphore to control access to a pool of items:*/
+  
+ class Pool {
+   private static final int MAX_AVAILABLE = 100;
+   private final Semaphore available = new Semaphore(MAX_AVAILABLE, true);
+
+   public Object getItem() throws InterruptedException {
+     available.acquire();
+     return getNextAvailableItem();
+   }
+
+   public void putItem(Object x) {
+     if (markAsUnused(x))
+       available.release();
+   }
+
+   // Not a particularly efficient data structure; just for demo
+
+   protected Object[] items = ... whatever kinds of items being managed
+   protected boolean[] used = new boolean[MAX_AVAILABLE];
+
+   protected synchronized Object getNextAvailableItem() {
+     for (int i = 0; i < MAX_AVAILABLE; ++i) {
+       if (!used[i]) {
+          used[i] = true;
+          return items[i];
+       }
+     }
+     return null; // not reached
+   }
+
+   protected synchronized boolean markAsUnused(Object item) {
+     for (int i = 0; i < MAX_AVAILABLE; ++i) {
+       if (item == items[i]) {
+          if (used[i]) {
+            used[i] = false;
+            return true;
+          } else
+            return false;
+       }
+     }
+     return false;
+   }
+ }
+```
+
+- Java 信号量还是AQS实现
+
+```java
+public class Semaphore implements java.io.Serializable {
+    /** All mechanics via AbstractQueuedSynchronizer subclass */
+    private final Sync sync;
+
+    /**
+     * Synchronization implementation for semaphore.  Uses AQS state
+     * to represent permits. Subclassed into fair and nonfair
+     * versions.
+     */
+    abstract static class Sync extends AbstractQueuedSynchronizer {
+        private static final long serialVersionUID = 1192457210091910933L;
+
+        Sync(int permits) {
+            setState(permits);
+        }
+
+        final int getPermits() {
+            return getState();
+        }
+
+        final int nonfairTryAcquireShared(int acquires) {
+            for (;;) {
+                int available = getState();
+                int remaining = available - acquires;
+                if (remaining < 0 ||
+                    compareAndSetState(available, remaining))
+                    return remaining;
+            }
+        }
+
+        protected final boolean tryReleaseShared(int releases) {
+            for (;;) {
+                int current = getState();
+                int next = current + releases;
+                if (next < current) // overflow
+                    throw new Error("Maximum permit count exceeded");
+                if (compareAndSetState(current, next))
+                    return true;
+            }
+        }
+
+        final void reducePermits(int reductions) {
+            for (;;) {
+                int current = getState();
+                int next = current - reductions;
+                if (next > current) // underflow
+                    throw new Error("Permit count underflow");
+                if (compareAndSetState(current, next))
+                    return;
+            }
+        }
+
+        final int drainPermits() {
+            for (;;) {
+                int current = getState();
+                if (current == 0 || compareAndSetState(current, 0))
+                    return current;
+            }
+        }
+    }
+
+
+    /**
+     * Creates a Semaphore with the given number of
+     * permits and nonfair fairness setting.
+     */
+    public Semaphore(int permits) {
+        sync = new NonfairSync(permits);
+    }
+}
+```
+
+
+
+### 8 synchronized区别ReentrantLock
+
+- Synchronized，重量级，线程切换，耗费系统资源，非公平锁，不可中断，一个等待队列
+- ReentrantLock，轻量级，不切换线程，cas+volatile，选择公平，选择中断，Condition等待队列
+  - 适用场景：时间锁、可中断锁、多个条件变量
+
 ## 3 JVM
 
 <img src="0JavaSummary.assets/image-20210712082721625.png" alt="image-20210712082721625" style="zoom: 33%;" />
@@ -1286,6 +2039,311 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 4. Netty 支持哪些心跳类型设置？Netty 长连接、心跳机制了解么？
 5. Netty 和 Tomcat 的区别？
 
+### IO多路复用
+
+<img src="0JavaSummary.assets/aHR0cHM6Ly91c2VyLWdvbGQtY2RuLnhpdHUuaW8vMjAxOC8xMS8xLzE2NmNjYmJjZmJhNTNjMGE-1623900177294" alt="img" style="zoom:50%;" />
+
+- 多路复用是指单个线程就可以同时处理多个网络连接的IO。
+- 原理：select/epoll不断轮询所负责的socket，以注册和监听为基础，当某个socket有数据到达了，就通知用户线程
+
+- poll和epoll的区别，是epoll 只查找注册的感兴趣连接的读写事件，poll每次都查找所有的连接事件
+  - 用户线程会阻塞在select方法，java是以epoll的底层的。
+- 适用场景：适合连接数多，同时处理多个连接请求
+
+> Java NIO（多路复用IO（IO Multiplexing）：即经典的Reactor设计模式，有时也称为**异步阻塞IO**
+
+
+
+- Java NIO概念：Channel、Buffer、Selector。
+  - Selector 选择器, 多路复用器（允许单个Selector处理多个 Channel）。作用是：检查多个 Channel（通道）的状态是否处于可读、可写事件。
+
+  - Buffer 缓冲区，一块内存区。（被NIO Buffer包裹起来，对外提供一系列的读写方便开发的接口。）
+- Channel 通道，是读写Buffer的入口。Channel 需要向`Selector`注册监听的事件
+  - 从通道进行数据读取 ：创建一个缓冲区，然后请求通道读取数据。
+  - 从通道进行数据写入 ：创建一个缓冲区，填充数据，并要求通道写入数据。
+- **工作原理：Selector负责监听外部事件，Channel把自己注册到Selector，并告诉自己感兴趣的事件。但外部有事件来的时候，就会去轮询Channel，找到合适的Channel来处理。而Buffer是存放数据的地方**
+
+```java
+
+//第一步 创建Selector：通过调用Selector.open()方法创建一个Selector
+Selector selector = Selector.open();
+//第二步 必须将channel注册到selector上，并且指定感兴趣的事件是 Accept
+ssc.register(selector, SelectionKey.OP_ACCEPT);
+
+while (true)
+	//第三步 通过Selector选择通道，一旦向Selector注册了多个通道，select()方法返回你所感兴趣的事件（如连接、接受、读或写）已经准备就绪的那些通道。
+	int nReady = selector.select(); // 一旦调用了select()方法，并且返回值表明有一个或更多个通道就绪了，然后可以通过调用selector的selectedKeys()方法
+	Set<SelectionKey> keys = selector.selectedKeys();
+
+	if (key.isReadable()) 
+		// 第四步 SelectionKey.channel()方法返回的通道需要转型成你要处理的类型，如SocketChannel等。
+		SocketChannel socketChannel = (SocketChannel) key.channel();
+		socketChannel.read(readBuff);
+		System.out.println("received : " + new String(readBuff.array()));
+```
+
+### 主从Reactor
+
+<img src="0JavaSummary.assets/image-20210726080354467.png" alt="image-20210726080354467" style="zoom: 33%;" />
+
+
+
+- mainReactor线程：Acceptor，专门负责建立连接。--bossGroup NioEventLoopGroup
+- subReactor 线程池：一个或者多个，专门处理IO请求。--workerGroup NioEventLoopGroup
+- worker 线程池：专门处理**非IO请求** -- 具体实现上，和subReactor在同一个线程池中。
+
+### 工作架构
+
+Netty是高性能、**异步事件驱动的NIO**框架，对TCP、UDP和文件传输的支持。
+
+- Selector：**Netty基于Selector对象实现I/O多路复用，通过 Selector, 一个线程可以监听多个连接的Channel事件**
+- Channel ，网络I/O操作。**EventLoop** 负责处理注册到其上的**Channel** 处理 I/O 操作。
+  - NioEventLoop 中包含了一个 NIO Selector、一个队列、一个线程
+  - EventLoopGroup 是线程池实现
+- 简要概述Reactor架构
+  - BossGroup：处理TCP连接。一个线程作为MainReactor，处理accept事件
+    - 接收客户端TCP连接，把事件任务放到TaskQueue
+    - NioEventLoop Thread处理Channel的就绪事件，注册Channel到WorkerGroup的Selector
+  - WorkerGroup
+    - 处理Selector上的读写事件（SubReactor）
+    - 将其转发到其ChannelPipeline(业务处理链)中处理。（业务线程池）
+- <img src="0JavaSummary.assets/image-20210726081729271.png" alt="image-20210726081729271" style="zoom: 50%;" />
+
+
+
+详细版本：
+
+![img](0JavaSummary.assets/47f4427f8820af163ca9cd1f545bf2c9.jpg)
+
+- 最佳实践
+
+1. 创建两个 NioEventLoopGroup 隔离 NIO Acceptor 和 NIO I/O
+2. 尽量不在 ChannelHandler 中启动用户线程（用户线程是指的是在Reactor模式之外的业务线程）
+3. 解码要放在 NIO 线程调用的解码 Handler 中进行，不要切换到用户线程中
+4. 如果业务逻辑简单，没有阻塞、数据库操作、网络操作等，直接在 NIO 线程上完成业务逻辑而不要切换到用户线程
+5. 如果业务逻辑复杂，则尽快释放 NIO 线程，交由用户业务线程处理
+
+### Netty零拷贝
+
+- mmap+write， 接收和发送`ByteBuffer`采用`DIRECT BUFFERS`，使用堆外直接内存进行`Socket`读写。**(减少用户态和内核态的对象拷贝)**
+
+- 组合和拆分Buffer:  CompositChannelBuffer·对象，可以将多个ByteBuf 合并为一个逻辑上的 ByteBuf, 避免了各个 ByteBuf 之间的拷贝**（减少在用户态中，对象与对象的拷贝）**
+
+- 文件传输采用了FileChannel的transferTo方法，直接将文件缓冲区的数据发送到目标Channel **(减少用户态和内核态的对象拷贝)**
+
+Netty 通过提供的 Composite（组合）和 Slice（拆分）单个传输的报文，两种 Buffer 来实现零拷贝。看下面一张图会比较清晰：
+![img](0JavaSummary.assets/20200226205251960-1624866709357.png)
+
+```java
+ class CompositeChannelBuffer extends AbstractChannelBuffer {
+ 
+    private final ByteOrder order;
+    private ChannelBuffer[] components; // 用来保存的就是所有接收到的 Buffer
+    private int[] indices; // Indices 记录每个 buffer 的起始位置
+    private int lastAccessedComponentId; // 记录上一次访问的 ComponentId
+    private final boolean gathering;
+ 
+    public byte getByte(int index) {
+        int componentId = componentId(index);
+        return components[componentId].getByte(index - indices[componentId]);
+}
+```
+
+- 内存池 ：ByteBufAllocator 用于分配 ByteBuf，使用了池化技术
+  - 原因：缓冲区Buffer是堆外内存，回收耗时
+  - 方案：基于内存池的缓冲区重用机制。
+    - 实现是PooledByteBufAllocator，
+    - 最底层分配直接内存是Java的`ByteBuffer.allocateDirect`
+
+  - 使用堆外内存的条件：
+    - 要有cleaner方法去释放(本质是软引用，Soft Reference)
+    - io.netty.noPreferDirect = false
+
+> Kafka的RequestChannel的MemoryPool作用是什么，怎么分配内存？和Netty有区别吗？有，Kafka是堆内分配的。
+
+### 常见的问题
+
+1. Netty 是什么？Netty 的特点是什么？
+
+   - 高性能、**异步事件驱动的NIO**框架，它提供了对TCP、UDP和文件传输的支持。
+
+2. Netty 的优势有哪些？为什么要用  Netty？Netty 的应用场景有哪些？
+
+   - 线程模型Reactor可灵活配置
+   - 自带编解码器解决 TCP 粘包/拆包问题。
+   - 比直接使用 Java 核心 API 有更高的吞吐量、更低的延迟、更低的资源消耗和更少的内存复制。
+   - 成熟稳定，大型项目考验，比如 Dubbo、RocketMQ 等等。
+
+   Netty 主要用来做**网络通信** :
+
+   - **RPC 框架**
+   -  **HTTP 服务器**
+   - **即时通讯系统**，**消息推送系统** 
+
+3. BIO、NIO和AIO的区别？NIO的组成？
+
+   - BIO 同步阻塞
+   - NIO 异步阻塞，IO多路复用模型
+   - AIO 异步非阻塞
+   - NIO：Buffer、Channel、Selector组成
+
+4. Netty的线程模型？Netty 核心组件有哪些？分别有什么作用？
+
+   - Reactor模型
+     - Selector：**基于Selector对象实现I/O多路复用，监听多个连接的Channel事件**
+     - Channel: 执行网络I/O操作。**EventLoop** 负责处理注册到其上的**Channel** 处理 I/O 操作，两者配合参与 I/O 操作。
+     - EventLoop :负责监听网络事件并调用事件处理器进行相关 I/O 操作的处理。
+   - ChannelFuture：封装请求的返回结果
+   - ChannelHandler 和 ChannelPipeline
+     - **ChannelHandler** 是消息的具体处理器，处理读写操作、客户端连接。
+     - ChannelPipeline 为 ChannelHandler 的链，定义了用于沿着链传播inBound和OutBound事件流的 API 。
+
+5. EventloopGroup 了解么?和 EventLoop 啥关系? Bootstrap 和 ServerBootstrap 了解么？
+
+- NioEventLoopGroup：管理EventLoop的生命周期，线程池。
+- (NioEventLoop)：处理多个Channel上的事件，线程。
+- Bootstrap、ServerBootstrap
+  Netty应用通常由Bootstrap开始，配置整个Netty程序，串联各个组件，
+  - Bootstrap类是客户端程序的启动引导类
+  - ServerBootstrap是服务端启动引导类
+
+![EventLoop and EventLoopGroup 6. Netty source code analysis of the - Code  World](0JavaSummary.assets/1739214-20190922162938492-493061362-1623906811385.png)
+
+1. NIOEventLoopGroup源码？NioEventLoopGroup 默认的构造函数会起多少线程？
+
+   - MultithreadEventLoopGroup -> MultithreadEventExecutorGroup-> AbstractEventExecutorGroup
+
+   ```java
+       // 从1, 系统属性，CPU核心数*2 这三个值中取出一个最大的
+       //可以得出 DEFAULT_EVENT_LOOP_THREADS 的值为CPU核心数*2
+       private static final int DEFAULT_EVENT_LOOP_THREADS = Math.max(1, SystemPropertyUtil.getInt("io.netty.eventLoopThreads", NettyRuntime.availableProcessors() * 2));
+   
+       // 被调用的父类构造函数，NioEventLoopGroup 默认的构造函数会起多少线程的秘密所在
+       // 当指定的线程数nThreads为0时，使用默认的线程数DEFAULT_EVENT_LOOP_THREADS
+       protected MultithreadEventLoopGroup(int nThreads, ThreadFactory threadFactory, Object... args) {
+           super(nThreads == 0 ? DEFAULT_EVENT_LOOP_THREADS : nThreads, threadFactory, args);
+       }
+   ```
+
+   
+
+2. Netty 服务端和客户端的启动过程了解么？默认情况  Netty 起多少线程？何时启动？
+
+```java
+ // server 端启动过程
+    void startServer(int port) {
+        // 1.bossGroup 用于接收连接，workerGroup 用于具体的处理
+        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        try {
+            //2.创建服务端启动引导类：ServerBootstrap
+            ServerBootstrap b = new ServerBootstrap();
+            //3.给引导类配置两大线程组,确定线程模型
+            b.group(bossGroup, workerGroup)
+                    // (非必备)打印日志
+                    .handler(new LoggingHandler(LogLevel.INFO))
+                    // 4.指定 IO 模型： 通过channel()方法给引导类 ServerBootstrap指定了 IO 模型为NIO
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        public void initChannel(SocketChannel ch) {
+                            ChannelPipeline p = ch.pipeline();
+                            //5.可以自定义客户端消息的业务处理逻辑
+                            p.addLast(new MyRegistryHandler());
+                        }
+                    });
+            // 6.bind端口,调用 sync 方法保证bind完成。
+            ChannelFuture f = b.bind(port).sync();
+            // 7.阻塞等待，直到服务器Channel关闭 (closeFuture()方法获取Channel 的CloseFuture对象,然后调用sync()方法)
+            f.channel().closeFuture().sync();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            //8.优雅关闭相关线程组资源
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+        }
+    }
+
+    // client 端启动过程
+    void startClient(String host, int port) {
+        //1.创建一个 NioEventLoopGroup 对象实例
+        EventLoopGroup group = new NioEventLoopGroup();
+        try {
+            //2.创建客户端启动引导类：Bootstrap
+            Bootstrap b = new Bootstrap();
+            //3.指定线程组
+            b.group(group)
+                    //4.指定 IO 模型
+                    .channel(NioSocketChannel.class)
+                    .handler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        public void initChannel(SocketChannel ch) throws Exception {
+                            ChannelPipeline p = ch.pipeline();
+                            // 5.通过 .handler()给引导类创建一个ChannelInitializer ，然后制定了客户端消息的业务处理逻辑 RpcProxyHandler 对象
+                            p.addLast(new RpcProxyHandler());
+                        }
+                    });
+            // 6.尝试建立连接。 通过 addListener 方法可以监听到连接是否成功，打印出连接信息。
+            ChannelFuture f = b.connect(host, port).addListener(future -> {
+                if (future.isSuccess()) {
+                    System.out.println("连接成功!");
+                } else {
+                    System.err.println("连接失败!");
+                }
+            }).sync();
+            // 7.等待连接关闭（阻塞，直到Channel关闭）
+            f.channel().closeFuture().sync();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            group.shutdownGracefully();
+        }
+    }
+```
+
+1. Netty 发送消息有几种方式？
+
+2. TCP 粘包/拆包的原因及解决方法？(OLS sina是怎么处理的，杰哥的RedisEncoder是怎么写的)
+
+   **本质上TCP是流式协议，消息无边界**
+
+   - 粘包原因：
+     - 发送方写入的数据 小于 Socket缓冲区
+     - 接受方接受数据不及时
+   - 半包原因
+     - 发送方写入的数据 大于 Socket缓冲区
+     - 发送的数据大于MTU，必须拆包
+
+   - 解决办法：
+     - 封装成帧，固定长度字段存内容的长度信息，每次先解析消息有多长，然后读取后续的内容。（Netty的实现：LengthFieldBasedFrameDecoder, LengthFieldPrepender）
+
+   **1.使用 Netty 自带的解码器**（一次编解码：解决粘包和半包问题，byteBuffer--> byteBuffer）
+
+   - **LineBasedFrameDecoder** : 发送端发送数据包的时候，每个数据包之间以换行符作为分隔，LineBasedFrameDecoder 的工作原理是它依次遍历 ByteBuf 中的可读字节，判断是否有换行符，然后进行相应的截取。
+   - **DelimiterBasedFrameDecoder** : 可以自定义分隔符解码器，**LineBasedFrameDecoder** 实际上是一种特殊的 DelimiterBasedFrameDecoder 解码器。
+   - **FixedLengthFrameDecoder**: 固定长度解码器，它能够按照指定的长度对消息进行相应的拆包。
+   - **LengthFieldBasedFrameDecoder**：最推荐++。
+
+   **2.自定义序列化编解码器**(二次编解码：解析byteBuffer-> Java Object)
+
+   * MessageToMessageDecoder Netty 自带的
+
+   - RedisDecoder\RedisEncoder：
+   - OLS 使用的是LengthFieldBaseFrameDecoder
+
+3. 了解哪几种序列化协议？如何选择序列化协议？从什么角度选择序列化协议？（TODO)
+
+   - 专门针对 Java 语言的：Kryo，FST 等等
+
+   - 跨语言的：Protostuff（基于 protobuf 发展而来），ProtoBuf，Thrift，Avro，MsgPack 等等
+
+4. Netty 支持哪些心跳类型设置？Netty 长连接、心跳机制了解么？
+
+   - 在 TCP 保持长连接的过程中，可能会出现断网等网络异常出现，异常发生的时候， client 与 server 之间如果没有交互的话，他们是无法发现对方已经掉线的。为了解决这个问题, 我们就需要引入 **心跳机制** 。
+   - **心跳机制的工作原理**是: 在 client 与 server 之间在一定时间内没有数据交互时, 即处于 idle 状态时, 客户端或服务器就会发送一个特殊的数据包给对方, 当接收方收到这个数据报文后, 也立即发送一个特殊的数据报文, 回应发送方, 此即一个 PING-PONG 交互。所以, 当某一端收到心跳消息后, 就知道了对方仍然在线, 这就确保 TCP 连接的有效性.
+   -  Netty 层面通过编码实现。通过 Netty 实现心跳机制的话，核心类是 IdleStateHandler 。（为什么不直接用TCP：SO_KEEPALIVE？不灵活，不容易控制，因此常常在应用层自己实现）
+
 ## 6 kafka
 
 分布式流处理框架，企业级的消息引擎
@@ -1304,96 +2362,186 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
   - **ISR**:In-Sync Replicas，与 Leader 同步的副本
     - 副本是否 ISR？replica.lag(10s)
   - **HW**：高水位值（High watermark）,消费者可见，ISR中最小的LEO。
-  
-- controller、leader、follower
-  - controller负责全局meta信息维护，管理Broker上下线、topic管理、管理分区副本分配、leader选举、管理所有副本状态机和分区状态机；通过zookeeper实现选举
-  - leader和follower是partition级别，leader提供读写，follower同步
+    - HW作用：HW和LEO共同完成副本同步
 
-### HW Leader Epoch
+<img src="0JavaSummary.assets/image-20210723144505788.png" alt="image-20210723144505788" style="zoom:50%;" />
 
-- **HW**：高水位值（High watermark）,消费者可见，ISR中最小的LEO。
-- LEO:Log End Offset。日志末端位移
-- HW作用：HW和LEO共同完成副本同步
+### 副本
 
-![image-20210723144505788](0JavaSummary.assets/image-20210723144505788.png)
+- 作用：冗余（无横向扩展、无数据局部性访问特性）
 
-- HW缺陷
-  - Leader 副本高水位更新和 Follower 副本高水位更新在时间上是存在错配的。这种错配是很多“数据丢失”或“数据不一致”问题的根源。
+- Leader 和 Follower 区别
 
-- Follower和Leader副本的HW和LEO是如何被更新的？ 
+  - Leader读写
+  - Follower PULL同步数据（2.4 ，可读）
 
-  - Leader和Follower副本的HW和LEO存储在哪里
+- ISR(In Sync Replica)
 
-    <img src="0JavaSummary.assets/image-20210723144936923.png" alt="image-20210723144936923" style="zoom:50%;" />
+  - 保持与Leader同步的副本。（lag=10s）
 
-  - 更新时机是什么？Broker0是Leader，1是Follower
+  1. ACK=all，ISR数据同步，回复ack
+  2. ACK=all，只有当ISR的大小大于最小的ISR集合，才能写成功。（**一致性和可用性的折衷，交给用户来决定**）
+
+- **ISR收缩和扩容、如何管理**
+
+  - 判断标准：lag值，`ReplicaManager`启动2个定时任务
+    - 收缩maybeShrinkIsr：lag值大于10s
+    - 扩容maybeExpandIsr：follower的LEO >= current HW
+  - isr-expiration检测每个分区是否需要缩减ISR集合
+    - 将变更后的数据记录到ZooKerper`/brokers/topics/partition/state`节点
+    - 更新缓存isrChangeSet
+    - 尝试更新HW
+  - isr-change-propagation 检查isrChangeSet，创建ISR变更通知事件
+    - 将变更后的数据记录到ZooKerper`/isr_change_notification/isr_change_sequence_number`节点
+    - 清空缓存isrChangeSet
+      - ISR变更事件创建条件
+        - 距离上一次ISR集合变化超过5s
+        - 上一次写入ZK超过60s
+    - Controller Watch这个节点，获取元数据更新信息，处理后，删除顺序节点
+
+- Leader 选举
+
+  - 思想：从 AR 中挑选首个在 ISR 中的副本，作为新 Leader
+  - 是否开启unclean选举
+  - 一种场景，一种选举策略。
+    - OfflinePartition: 分区上下线
+    - ReassignPartition：手动kafka-reassign-partitions 
+    - PreferredReplicaPartition ：手动kafka-preferred-replica-election
+    - ControlledShutdownPartition ：Broker 正常关闭
+
+**副本同步全流程，即HW和LEO是如何被更新的？**
+
+- Leader和Follower副本的HW和LEO存储在哪里
+
+<img src="0JavaSummary.assets/image-20210723144936923.png" alt="image-20210723144936923" style="zoom:50%;" />
+
+- Leader 处理生产者请求
+
+  1. 写到本地磁盘，更新自己的LEO。
+  2. 更新分区高水位值。
+     i. 获取 本地远程副本 LEO 值{LEO-1，LEO-2，……，LEO-n}。
+     ii. 获取 Leader 副本高水位值：currentHW。
+     iii. 取他们的最小值
+
+- Leader处理Follower Fetch 请求
+
+  1. 读取磁盘（或页缓存）消息
+
+  2. 更新远程副本 LEO 值，从Follower来的请求的LEO值
+
+  3. 更新分区高水位值
+
+     i. 获取 本地远程副本 LEO 值{LEO-1，LEO-2，……，LEO-n}。
+     ii. 获取 Leader 副本高水位值：currentHW。
+     iii. 取他们的最小值
+
+- Follower 拉取 Leader 消息
+
+  1. 写到本地磁盘，更新自己的LEO
+  2. 更新高水位值。
+     i. 获取 Leader 发送的高水位值：currentHW。
+     iii. 更新高水位为 `min(Leader的currentHW, 自己的currentLEO)`
+
+- 举例
+
+  - 初始状态都是0，生产者发起请求，Follower发起Fetch请求
+
+    ​	<img src="0JavaSummary.assets/image-20210725234557899.png" alt="image-20210725234557899" style="zoom:40%;" />
 
     
 
-  ![image-20210723145016603](0JavaSummary.assets/image-20210723145016603.png)
+### Leader Epoch
 
-- 简述其流程
+Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一致性
 
-  - **Leader 副本**写消息
+- 高水位机制缺陷（无法保证 Leader 连续变更场景下的数据一致性）
 
-    1. 写入消息到本地磁盘，更新自己的LEO。
-    2. 更新分区高水位值。
-       i. 获取 本地远程副本 LEO 值{LEO-1，LEO-2，……，LEO-n}。
-       ii. 获取 Leader 副本高水位值：currentHW。
-       iii. 取他们的最小值
+  <img src="0JavaSummary.assets/image-20210725235931924.png" alt="image-20210725235931924" style="zoom: 25%;" />
 
-  - Follower 拉取消息
+  - 日志丢失场景：前提是**Broker 端参数 min.insync.replicas 设置为 1**， 2台Broker同时宕机，低水位的Broker B先启动起来，成为leader，当Broker A恢复，发现现在的HW是1，截断日志。
 
-    - 读取磁盘（或页缓存）中的消息数据。
-    - 使用 Follower 副本发送请求中的位移值更新远程副本 LEO 值。
-    - 更新分区高水位值（具体步骤与处理生产者请求的步骤相同）。
+    - B 重启回来后，需要向 A 获取 Leader 的 LEO 值=2
+    - A的LEO值比B大，缓存中也没有比2大的，不截断日志
+    - 当 A 重启回来后，执行与 B 相同的逻辑判断，发现也不用执行日志截断
+    - Producer向 B 写入新消息时，副本 B 所在的 Broker 缓存中，会生成新的 Leader Epoch 条目：[Epoch=1, Offset=2]
 
-  - **Follower 副本**
+    <img src="0JavaSummary.assets/image-20210725235403829.png" alt="image-20210725235403829" style="zoom: 50%;" />
 
-    从 Leader 拉取消息的处理逻辑如下：
+  - 日志不一致场景：前提是一样的，2台Broker同时宕机，Broker A的HW = 2， Broker B的HW =1 ,Broker B先启动起来，成为leader，接受了一条生产消息，HW==> 2；Broker A活过来，HW和leader的HW是一样的，不拉取消息。
 
-    1. 写入消息到本地磁盘。
-    2. 更新 LEO 值。
-    3. 更新高水位值。
-       i. 获取 Leader 发送的高水位值：currentHW。
-       ii. 获取步骤 2 中更新过的 LEO 值：currentLEO。
-       iii. 更新高水位为 min(currentHW, currentLEO)。
+- 引入Leader Epoch 机制
 
-1. Leader Epoch引入解决的问题是什么？Leader 副本和Follower副本高水位的更新时间上会出现什么问题？
+> Leader 和 Follower 的 HW 值更新时间是存在错配的，Follower 的 HW 更新永远落后于 Leader 的 HW。造成“数据丢失”或“数据不一致”
 
-   1. 为什么？
+- 是什么？Leader Epoch是一种机制，一种概念。分为2个部分
+  - Epoch。一个单调增加的版本号。Leader变更，版本号增加。
 
-   2. 是什么？Leader Epoch是一种机制，一种概念。分为2个部分
+  - 起始位移（Start Offset）。Leader 副本在该 Epoch 值上写入的首条消息的位移。
+  - **每个分区都缓存 Leader Epoch 数据**，定期持久化到checkpoint 文件
 
-      - Epoch。一个单调增加的版本号。每当副本领导权发生变更时，都会增加该版本号。小版本号的 Leader 被认为是过期 Leader，不能再行使 Leader 权力。
+- 如何解决？
 
-      - 起始位移（Start Offset）。Leader 副本在该 Epoch 值上写入的首条消息的位移。
-      - **每个分区都缓存 Leader Epoch 数据**，同时它还会定期地将这些信息持久化到一个 checkpoint 文件中
+  - 每次活过来的follower去Leader拉取Leader的LEO值，以这个值来作为判断是否做同步的标准。
 
-   3. 做什么？
-
-   4. 场景1：前提是**Broker 端参数 min.insync.replicas 设置为 1**， 2台Broker同时宕机，原来低水位的Broker B先启动起来，kafka将它设置为leader，当以前的Leader的broker A 启动起来的时候，发现现在的HW是1，那么就截断自己的日志。那么这些被截断的日志就属于丢失的日志
-
-   5. 场景2：前提是一样的，2台Broker同时宕机，Broker A的HW = 2， Broker B的HW =1 ,还是Broker B先启动起来，它自然成为leader，然后它接受了一条生产消息，HW==> 2， 那么这个时候Broker A活过来了，它发现自己的HW和现在的leader的HW是一样的，那么就不会拉取消息。其实他们的第2条消息是不一致的，所以出现了消息不一致的情况。
-
-   6. Leader Epoch 如何解决case 1 和 case 2。每次活过来的follower去Leader拉取Leader的LEO值，以这个值来作为判断是否做同步的标准。
-
-
+  
 
 ### 无消息丢失
 
-从Producer应该做什么，Broker做什么，Consumer做什么来分析？
+- Broker
+	- 设置 unclean.leader.election.enable = false
+	- 设置 replication.factor >= 3。目前防止消息丢失的主要机制就是冗余。
+	- 设置 min.insync.replicas > 1，如果生产时isr不满足最小同步副本数，则收到异常NotEnoughReplicasException
+	- replication.factor = min.insync.replicas + 1，可用性和一致性的权衡。
+	- 单个broker对分区个数有限制，分区越多，占用内存越多，完成leader选举所需时间也越长
+	- 极端情况，Kafka生产者写消息不丢失，page cache 改成同步落磁盘
+	- 硬件需求
+	   1. 磁盘速度决定producer的延迟性能
+	   2. 磁盘容量决定数据冗余量以及存储周期
+	   3. 内存可用于做页面缓存供kafka缓存正在使用中的日志片段
+	   4. 网络决定最大吞吐量
+	   5. kafka对cpu要求不高，但是cpu会影响加解压缩以及GC停顿
+	
+- Producer
+  - 设置 acks = all
+  - 使用 producer.send(msg, callback)，用 Callback 来处理异常情况
+  - 设置 retries、retry.backoff.ms，重试几次，每次重试的间隔
+  - buffer.memory、block.on.buffer.full/max.block.ms：内存缓冲的大小的，默认值32MB
+    - buffer.memory设太小，消息写入内存缓冲，但Sender线程发送不及时，被写满，阻塞用户Producer线程（压测）
+  - batch.size，多条消息合成一个批次发往同一分区时，批次占用内存的大小。默认值16KB
+    - 提升batch.size，提升吞吐，延迟高
+  - linger.ms，一批次最多等待时间，50ms。
+  - client.id
+  - max.in.flight.requests.per.connetion，producer 收到服务器响应之前可以发送多少个消息，影响吞吐量、占用内存、消息顺序性
+  - request.timeout.ms（请求超时时间）、metadata.fetch.timeout.ms（元数据请求超时时间）
+  - max.block.ms 最大等待时间，比如send()等待元数据信息返回
+  - max.request.size，请求消息的最大大小
 
-1. 使用 producer.send(msg, callback)，回调
-2. 设置 acks = all
-3. 设置 retries ， Producer 自动重试
-4. 设置 unclean.leader.election.enable = false
-5. 设置 replication.factor >= 3。目前防止消息丢失的主要机制就是冗余。
-6. 设置 min.insync.replicas > 1
-7. replication.factor = min.insync.replicas + 1，可用性和一致性的权衡。
-8. 手动提交位移，Consumer  enable.auto.commit= false
-9. 极端情况，Kafka生产者写消息不丢失，page cache 改成同步落磁盘
+  - produce的重试设置
+    - broker返回的错误有两种，一种可重试解决，例如 LEADER_NOT_AVAILABLE
+    - 另一种不可重试，比如网络中断，重试有可能导致重复消息
+    - Kafka 无法避免消息重复，在应用程序中加入唯一标识符检测重复，业务“幂等”
 
+- Consumer端
+
+  - 配置说明
+    - auto.offset.reset（seekToBegining()，seekToEnd()）
+    - enable.auto.commit、auto.commit.interval.ms 自动提交位移
+    - partition.assignment.strategy，Range、RoundRobin
+    - client.id
+    - max.poll.records，单次poll的数据条数
+    - fetch.min.bytes，消费者从服务器获取记录的最小字节数，borker 会等到有足够的可用数据时才把数据返回给消费者
+    - [fetch.max.wait.ms](http://fetch.max.wait.ms)，消费者等待 broker 返回的最长时间，默认 500ms
+    - max.partition.fetch.bytes，每个分区返回给消费者最大的字节数，默认 1MB
+    - [session.timeout.ms](http://session.timeout.ms)，消费者与服务器断开连接的判断时间，默认 3s；若 consumer 没有在此时间内发送心跳给 GroupCoordinator，则被认为死亡；一般将 [heartbeat.interval.ms](http://heartbeat.interval.ms) 配置为 session.timeout.ms的 1/3
+  - offset提交
+    - 总是在处理完事件后在提交偏移量，在设计程序时要考虑到 rebalance 问题，要在分区撤销之前提交偏移量，可在调用 subscribe() 时传入一个 ConsumerRebalanceListener
+    - 当部分消息处理失败时的重试，有两种模式
+      1. 一可提交最后一个成功处理的偏移量，把未处理的消息保存到缓冲区，调用消费者pause()方法暂停轮询返回的数据，保持轮询的同时尝试重新处理，成功或者达到重试次数上限（记录错误丢弃消息），然后调用rersume()方法恢复消费者轮询数据
+      2. 二可将错误写入单独的 topic，然后继续，再由其他 consumer 消费该 topic 单独处理（在 0.10.1 之后的版本的 Kafka 中的心跳已经交由一个单独的线程 HeartbeatThread 来提交）
+  - 数据处理耗时过长时，可能导致 consumer.poll() 循环等待过久，导致心跳无法及时发送，这种较为耗时的任务应提交给另一个线程池来异步处理（在 0.10.1 之后的版本的 Kafka 中的心跳已经交由一个单独的线程 HeartbeatThread 来提交）
+  - 在 0.10.1 之后的版本里，如果 consumer 需要处理耗时较长的任务，只需加大 [max.poll.interval.ms](http://max.poll.interval.ms) 的值来增加轮询间隔时长
+  - 如果想把 offset 保存到别的数据库里，可使用 seek() 和 ConsumerRebalanceListener 配合
+  - 让 consumer 退出循环应当调用 consumer.wakeup()
 
 
 1. Producer丢失消息，从哪里分析？什么原因会导致消息丢失？解决？
@@ -1409,8 +2557,6 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
    >  min.insync.replicas=1理解？
    >
    >  思考题：Kafka有一个隐私的消息丢失场景：增加主题分区。当增加主题分区后，如果Producer先于Consumer感知到这个分区，而Consumer设置的是从latest的地方读取数据，那么就会存在数据丢失。有什么解决办法么？
-
-
 
 
 ### Producer
@@ -1656,6 +2802,7 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 ### Controller
 
 - 做什么
+  - 全局meta信息维护，管理Broker上下线、topic管理、管理分区副本分配、leader选举、管理所有副本状态机和分区状态机；通过zookeeper实现选举
   - Topic、Partition管理，Prefer 领导者选举：LeaderAndIsrRequest
   - Broker管理，元数据管理：UpdateMetadataRequest
   - StopReplicaRequest：使用场景：分区副本迁移和删除主题
@@ -1740,43 +2887,6 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
     - 与ZAB不同，Leader负责读写请求
     - 好处：切换Controller低延时，元数据可以缓存磁盘。
 
-### 副本
-
-- 作用：冗余（无横向扩展、无数据局部性访问特性）
-
-- Leader 和 Follower 区别
-  - Leader读写
-  - Follower PULL同步数据（2.4 ，可读）
-  
-- ISR(In Sync Replica)
-
-  - 保持与Leader同步的副本。（lag=10s）
-
-  1. ACK=all，ISR数据同步，回复ack
-  2. ACK=all，只有当ISR的大小大于最小的ISR集合，才能写成功。（**一致性和可用性的折衷，交给用户来决定**）
-
--  Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一致性
-  - 高水位机制（无法保证 Leader 连续变更场景下的数据一致性）
-  - Leader Epoch 机制
-  
-- Leader 选举
-
-  - 思想：从 AR 中挑选首个在 ISR 中的副本，作为新 Leader
-  - 是否开启unclean选举
-  - 一种场景，一种选举策略。
-    - OfflinePartition: 分区上下线
-    - ReassignPartition：手动kafka-reassign-partitions 
-    - PreferredReplicaPartition ：手动kafka-preferred-replica-election
-    - ControlledShutdownPartition ：Broker 正常关闭
-
-- 同步的完整流程
-
-  - Follower 发送 FETCH 请求给 Leader
-  - Leader 读取消息，更新内存 Follower 副本的 LEO 值，更新为 FETCH 请求中的 fetchOffset 值。尝试更新HW值。
-  - Follower 接收响应，写日志，更新 LEO 和 HW 值。
-
-  > Leader 和 Follower 的 HW 值更新时机是不同的，Follower 的 HW 更新永远落后于 Leader 的 HW。这种时间上的错配是造成各种不一致的原因。
-
 
 
 ### 原理
@@ -1855,7 +2965,7 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
   - 增加io线程数，加倍8，临时加大处理能力
   - 增加主题分区
 
-
+> 
 
 - EMC案例1：单分区2个副本的UUT主题， Broker A是 Leader，Broker B是follower。运行正常。后来新来了10台同类型的UUT，这10台UUT被同时调度在同一个时刻，进行测试，导致写日志流量激增。导致 Broker A 瞬间积压了大量的未处理 PRODUCE 请求。同事执行了 Preferred Leader 选举，将 Broker B 变成Leader。
   - 日志中出现了Broker A抛出的超时异常，Producer程序异常，失败。
@@ -1985,7 +3095,55 @@ val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
 
 
 
+### Kafka监控
 
+监控什么？机器和进程
+
+> `**Load Average**的值<=**CPU**个数*核数X0.7`，**Load Average**会有3个状态平均值，分别是1分钟、5分钟和15分钟平均**Load**。 如果1分钟平均出现大于**CPU**个数X核数的情况，还不需要担心；如果5分钟的平均也是这样，那就要警惕了；15分钟的平均也是这样，就要分析哪里出现问题。
+
+#### 1 主机监控指标
+
+- 机器负载（Load）
+-  CPU 使用率
+- 内存使用率，包括空闲内存（Free Memory）和已使用内存（Used Memory）
+- 磁盘 I/O 使用率，包括读使用率和写使用率
+- 网络 I/O 使用率
+- TCP 连接数
+- 打开文件数
+- inode 使用情况
+
+#### 2 JVM监控
+
+- 搞清楚 Broker 端 JVM 进程的 Minor GC 和 Full GC 的发生频率和时长、活跃对象的总大小和 JVM 上应用线程的大致总数，因为这些数据都是你日后调优 Kafka Broker 的重要依据。
+- Full GC的发生频率和时间：看GC log，自己计算频率。
+- 存活对象的大小：设置成1.5-2倍成最大堆内存
+- 应用线程总数，了解CPU使用情况
+
+#### 3 进程看什么
+
+- 端口能否监听
+- 日志有没有异常
+- 关键的一些线程是否还存活：
+  - kafka-log-cleaner-thread: 日志线程Log Compaction
+  - ReplicaFetcherThread : Follower向 Leader 副本拉取消息
+
+#### 4JMX指标
+
+- 网络入口出口：BytesIn\Bytesout， 注意打满
+- NetworkProcessorAvgIdlePercent：即网络线程池线程平均的空闲比例。通常来说，你应该确保这个 JMX 值长期大于 30%。如果小于这个值，就表明你的网络线程池非常繁忙，你需要通过增加网络线程数或将负载转移给其他服务器的方式，来给该 Broker 减负。
+- RequestHandlerAvgIdlePercent：即 I/O 线程池线程平均的空闲比例。同样地，如果该值长期小于 30%，你需要调整 I/O 线程池的数量，或者减少 Broker 端的负载。
+- UnderReplicatedPartitions：即未充分备份的分区数。所谓未充分备份，是指并非所有的 Follower 副本都和 Leader 副本保持同步。一旦出现了这种情况，通常都表明该分区有可能会出现数据丢失。因此，这是一个非常重要的 JMX 指标。
+- ISRShrink/ISRExpand：即 ISR 收缩和扩容的频次指标。如果你的环境中出现 ISR 中副本频繁进出的情形，那么这组值一定是很高的。这时，你要诊断下副本频繁进出 ISR 的原因，并采取适当的措施。
+- ActiveControllerCount：即当前处于激活状态的控制器的数量。正常情况下，Controller 所在 Broker 上的这个 JMX 指标值应该是 1，其他 Broker 上的这个值是 0。如果你发现存在多台 Broker 上该值都是 1 的情况，一定要赶快处理，处理方式主要是查看网络连通性。这种情况通常表明集群出现了脑裂。脑裂问题是非常严重的分布式故障，Kafka 目前依托 ZooKeeper 来防止脑裂。但一旦出现脑裂，Kafka 是无法保证正常工作的。
+
+#### 5 监控Kafka客户端
+
+- 生产者需要监控什么？有没有在正常工作，kafka-producer-network-thread ; 
+- Producer : request-latency，即消息生产请求的延时。
+- Consumer : records-lag 和 records-lead 
+- Consumer Group: join rate 和 sync rate， Rebalance 的频繁程度。
+
+> 监控框架：Kafka Manager，以didi的最为流行了，监控管理、 Kafka Eagle 
 
 ### 实际操作
 
@@ -2212,7 +3370,136 @@ val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
 
 慢开始和快恢复的快慢指的是 cwnd 的设定值，而不是 cwnd 的增长速率。慢开始 cwnd 设定为 1，而快恢复 cwnd 设定为 ssthresh。
 
+### 零拷贝
 
+> "**Zero-copy**" describes computer operations in which the CPU does not perform the task of copying data from one memory area to another. This is frequently used to save CPU cycles and memory bandwidth when transmitting a file over a network.
+
+是指计算机执行操作时，CPU不需要先将数据从某处内存复制到另一个特定区域，这种技术通常用于通过网络传输文件时节省CPU周期和内存带宽。
+
+实现的两种方式分别是：
+
+- **mmap+write**
+- **Sendfile**
+
+Java进程发起Read/Write请求加载数据的大致流程：底层调用Linux `read() write()`实现
+
+<img src="0JavaSummary.assets/3b0c6e94c9cc493c8d1cad2e07b9ddb0tplv-k3u1fbpfcp-zoom-1.image" alt="优享资讯| 什么是mmap？ 经典题目" style="zoom:67%;" />
+
+这个过程有什么问题? 一次简单的IO过程产生了4次上下文切换，在高并发场景下会对性能产生较大的影响。
+
+- 用户进程通过`read()`方法向操作系统发起调用，此时上下文从用户态转向内核态
+- DMA控制器把数据从硬盘中拷贝到读缓冲区
+- CPU把读缓冲区数据拷贝到应用缓冲区，上下文从内核态转为用户态，`read()`返回
+- 用户进程通过`write()`方法发起调用，上下文从用户态转为内核态
+- CPU将应用缓冲区中数据拷贝到socket缓冲区
+- DMA控制器把数据从socket缓冲区拷贝到网卡，上下文从内核态切换回用户态，`write()`返回
+
+> DMA（Direct Memory Access）直接内存访问技术，本质上来说他就是一块主板上独立的芯片，通过它来进行内存和IO设备的数据传输，从而减少CPU的等待时间。
+
+
+
+**利用虚拟内存，让内核空间和用户空间的虚拟地址，映射到同一个物理内存。这样DMA填充这块缓冲区的时候，两个空间都可见。**
+
+![clip_image004](0JavaSummary.assets/1550970-20201212172033717-1748604803-1624862837723.png)
+
+#### mmap + write
+
+利用虚拟内存，让内核空间和用户空间的虚拟地址，映射到同一个物理内存。
+
+使用`mmap`替换了read+write中的read操作，减少了一次CPU的拷贝。
+
+- mmap 是一种内存映射文件的方法
+
+- 换一种说法，实现方式是将读缓冲区的地址和用户缓冲区的地址进行映射，内核缓冲区和应用缓冲区共享。
+
+<img src="0JavaSummary.assets/b306256e43ba468abd5137775769cac1tplv-k3u1fbpfcp-zoom-1.image" alt="img" style="zoom:80%;" />
+
+
+
+整个过程发生了**4次用户态和内核态的上下文切换**和**3次拷贝**，具体流程如下：
+
+1. 用户进程通过`mmap()`方法向操作系统发起调用，上下文从用户态转向内核态
+2. DMA控制器把数据从硬盘中拷贝到读缓冲区
+3. **上下文从内核态转为用户态，mmap调用返回**
+4. 用户进程通过`write()`方法发起调用，上下文从用户态转为内核态
+5. **CPU将读缓冲区中数据拷贝到socket缓冲区**
+6. DMA控制器把数据从socket缓冲区拷贝到网卡，上下文从内核态切换回用户态，`write()`返回
+
+>  适用场景：`mmap`的方式下，用户进程中的内存是虚拟的，只是映射到内核的读缓冲区，所以可以节省一半的内存空间，比较适合大文件的传输。
+
+
+
+#### sendfile
+
+替代了`read+write`，减少一次CPU拷贝，和2次上下文切换
+
+它是linux2.1引入的系统调用函数，目的是简化网络在两个通道之间的数据传输过程。`sendfile`替代了`read+write`，减少了数据复制，节省了一次系统调用，也就是2次上下文切换。
+
+<img src="0JavaSummary.assets/d6d68cc34030404a85d30d39c60ab3e4tplv-k3u1fbpfcp-zoom-1.image" alt="img" style="zoom:80%;" />
+
+
+
+整个过程发生了**2次用户态和内核态的上下文切换**和**3次拷贝**，具体流程如下：
+
+1. 用户进程通过`sendfile()`方法向操作系统发起调用，上下文从用户态转向内核态
+2. DMA控制器把数据从硬盘中拷贝到读缓冲区
+3. CPU将读缓冲区中数据拷贝到socket缓冲区
+4. DMA控制器把数据从socket缓冲区拷贝到网卡，上下文从内核态切换回用户态，`sendfile`调用返回
+
+>  `sendfile`方法IO数据对用户空间完全不可见，所以只能适用于完全不需要用户空间处理的情况，比如静态文件服务器。
+
+>  更高级： 数据传送只发生在内核空间，所以减少了一次上下文切换；但是还是存在一次 Copy，能不能把这一次 Copy 也省略掉？
+>
+>  Linux2.4内核优化，将 Kernel buffer 中对应的数据描述信息（内存地址，偏移量）记录到相应的 Socket 缓冲区当中，节约CPU copy。（这种叫做DMA gather）
+
+它将读缓冲区中的数据描述信息--内存地址和偏移量记录到socket缓冲区，由 DMA 根据这些将数据从读缓冲区拷贝到网卡，相比之前版本减少了一次CPU拷贝的过程
+
+<img src="0JavaSummary.assets/a97c4913546e4ee38f9a44cbec0b7a97tplv-k3u1fbpfcp-zoom-1.image" alt="img" style="zoom:67%;" />
+
+整个过程发生了**2次用户态和内核态的上下文切换**和**2次拷贝**，其中更重要的是完全没有CPU拷贝，具体流程如下：
+
+1. 用户进程通过`sendfile()`方法向操作系统发起调用，上下文从用户态转向内核态
+2. DMA控制器利用scatter把数据从硬盘中拷贝到读缓冲区离散存储
+3. CPU把读缓冲区中的文件描述符和数据长度发送到socket缓冲区
+4. DMA控制器根据文件描述符和数据长度，使用scatter/gather把数据从内核缓冲区拷贝到网卡
+5. `sendfile()`调用返回，上下文从内核态切换回用户态
+
+#### 中间件的应用
+
+- RocketMQ：生产者和消费者都是`mmap+write`
+- Kafka: 生产者是`mmap+write`, 消费者或者Follow同步消息是`sendfile`
+- Netty：
+
+
+
+#### Java 零拷贝实现
+
+- MappedByteBuffer 实现mmap，底层是生成了**DirectByteBuffer**，堆外内存。
+- FileChannel的transferTo实现 **Channel-to-Channel **，实现了sendFile
+
+```java
+
+// FileChannel transferTo：开始传输的位置，传输的字节数，以及目标通道
+public abstract long transferTo(long position, long count, WritableByteChannel target) throws IOException;
+// 用法：channel.transferTo(0, channel.size(), target);
+
+```
+
+
+
+#### 总结
+
+- 由于CPU和IO速度的差异问题，产生了DMA技术，通过DMA搬运来减少CPU的等待时间。
+
+- 传统的IO`read+write`方式会产生2次DMA拷贝+2次CPU拷贝，同时有4次上下文切换。
+
+- 而通过`mmap+write`方式则产生2次DMA拷贝+1次CPU拷贝，4次上下文切换，通过内存映射减少了一次CPU拷贝，可以减少内存使用，适合大文件的传输。
+
+- `sendfile`方式是新增的一个系统调用函数，产生2次DMA拷贝+1次CPU拷贝，但是只有2次上下文切换。因为只有一次调用，减少了上下文的切换，但是用户空间对IO数据不可见，适用于静态文件服务器。
+
+- `sendfile+DMA gather`方式产生2次DMA拷贝，没有CPU拷贝，而且也只有2次上下文切换。虽然极大地提升了性能，但是需要依赖新的硬件设备支持。
+
+参考：[简单易懂](https://blog.csdn.net/zhengchao1991/article/details/104524468) [大神的Linux I/O 原理和 Zero-copy 技术全面揭秘](https://mp.weixin.qq.com/s/TEUrcD4c_8Aw7bzTXr83kw)
 
 ## 杂货
 

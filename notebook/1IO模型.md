@@ -143,7 +143,7 @@ while (true)
 
 ### 3.0 基本模型
 每一个handler都是在自己的线程中启动和运行，如常用的线程池的方式来处理请求。
-<img src="1IO模型.assets/780676-20190727140921602-1770136470-3332901.png" alt="img" style="zoom:67%;" />
+<img src="1IO模型.assets/780676-20190727140921602-1770136470-3332901.png" alt="img" style="zoom: 50%;" />
 
 Reactor也可以称作反应器模式，它有以下几个特点：
 
@@ -155,22 +155,20 @@ Reactor也可以称作反应器模式，它有以下几个特点：
 
 ### 3.1 单线程
 
-<img src="1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-3332737.png" alt="单线程" style="zoom:67%;" />
+<img src="1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-3332737.png" alt="单线程" style="zoom: 50%;" />
 
 - Acceptor ：只建立连接
 - Reactor线程：只有一个，负责对worker进行处理。
 
 ### 3.2  多线程
-<img src="1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-20210610215139535-3333101.png" alt="多线程" style="zoom:67%;" />
+<img src="1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-20210610215139535-3333101.png" alt="多线程" style="zoom: 50%;" />
 
 - Acceptor1个，只接受连接
 - Reactor线程1个：只处理IO请求
 - Worker线程池：专门用于处理**非IO操作**。
 
 ### 3.3 主从
-![多reactor多worker线程模式](1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-20210610215316058-3333199.png)
-
-<img src="1IO模型.assets/image-20210610220144975-3333706.png" alt="image-20210610220144975" style="zoom: 80%;" />
+<img src="1IO模型.assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2NyeGtf,size_16,color_FFFFFF,t_70-20210610215316058-3333199.png" alt="多reactor多worker线程模式" style="zoom:50%;" />
 
 - Acceptor：变成了mainReactor线程，专门负责建立连接。--bossGroup NioEventLoopGroup
 - subReactor 线程：一个或者多个，专门处理IO请求。--workerGroup NioEventLoopGroup
@@ -391,7 +389,7 @@ Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同
 
 - EventLoopGroup、EventLoop
 
-  - EventLoop 是 Netty 对线程池的一种实现，可更高效地进行多线程处理、并发、控制流
+  - EventLoopGroup 是 Netty 对线程池的一种实现，可更高效地进行多线程处理、并发、控制流
 
     ![image-20210617174122328](1IO模型.assets/image-20210617174122328-1623922883519.png)
 
@@ -707,7 +705,7 @@ Netty在启动辅助类中可以灵活的配置TCP参数，满足不同的用户
    - Kafka是使用文件Channel的transferTo方法，zeroCopy，不经过内核内存的缓冲区。
    - Netty是使用堆外内存，不经过内核内存的缓冲区。(堆外内存如何做垃圾回收？它的本质是软引用)
 
-   当进行Socket IO读写的时候，为了避免从内核内存Buffer拷贝一份副本到用户内存，Netty的ByteBuf分配器直接创建非堆内存避免缓冲区的二次拷贝，通过“零拷贝”来提升读写性能。
+   
 
 ## 6 零拷贝
 
