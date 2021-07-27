@@ -2366,6 +2366,26 @@ Netty 通过提供的 Composite（组合）和 Slice（拆分）单个传输的�
 
 <img src="0JavaSummary.assets/image-20210723144505788.png" alt="image-20210723144505788" style="zoom:50%;" />
 
+### 物理存储
+
+- 文件格式和Request消息一致，因此可以使用ZeroCopy技术直接存储在磁盘上
+
+- v0
+
+  <img src="0JavaSummary.assets/120302.png" alt="img" style="zoom:80%;" />
+
+- v1
+
+  <img src="0JavaSummary.assets/120304.png" alt="img" style="zoom:67%;" />
+
+- v2
+
+  <img src="0JavaSummary.assets/120306.png" alt="img" style="zoom:80%;" />
+
+- DumpLogSegment工具，可以查看片段内容，显示消息的偏移量、校验和、魔术、消息大小和压缩算法
+- LogSegment有Index（基于mmap实现），把偏移量映射到片段文件和偏移量在文件里的位置；kafka不维护index的校验和，损坏则重新读取消息生成index
+- Broker Map结构segments维护着当前的LogSegment的引用，LogSegment包含日志和index，fetch请求先在map中找到对应的LogSegment，接着读取出FetchDataInfo（Partition.read() -> Log.read() -> LogSement.read() -> LogSegment.translateOffset()）
+
 ### 副本
 
 - 作用：冗余（无横向扩展、无数据局部性访问特性）
@@ -2485,8 +2505,6 @@ Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一
 
   
 
-- 
-
 ### 无消息丢失
 
 - Broker
@@ -2526,6 +2544,7 @@ Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一
 - Consumer端
 
   - 配置说明
+
     - auto.offset.reset（seekToBegining()，seekToEnd()）
     - enable.auto.commit、auto.commit.interval.ms 自动提交位移
     - partition.assignment.strategy，Range、RoundRobin
@@ -2535,15 +2554,17 @@ Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一
     - [fetch.max.wait.ms](http://fetch.max.wait.ms)，消费者等待 broker 返回的最长时间，默认 500ms
     - max.partition.fetch.bytes，每个分区返回给消费者最大的字节数，默认 1MB
     - [session.timeout.ms](http://session.timeout.ms)，消费者与服务器断开连接的判断时间，默认 3s；若 consumer 没有在此时间内发送心跳给 GroupCoordinator，则被认为死亡；一般将 [heartbeat.interval.ms](http://heartbeat.interval.ms) 配置为 session.timeout.ms的 1/3
+
   - offset提交
-    - 总是在处理完事件后在提交偏移量，在设计程序时要考虑到 rebalance 问题，要在分区撤销之前提交偏移量，可在调用 subscribe() 时传入一个 ConsumerRebalanceListener
+
+    - 消费完，提交offset，设计时需要考虑到Rebalance：调用 subscribe() 时传入 ConsumerRebalanceListener
     - 当部分消息处理失败时的重试，有两种模式
-      1. 一可提交最后一个成功处理的偏移量，把未处理的消息保存到缓冲区，调用消费者pause()方法暂停轮询返回的数据，保持轮询的同时尝试重新处理，成功或者达到重试次数上限（记录错误丢弃消息），然后调用rersume()方法恢复消费者轮询数据
-      2. 二可将错误写入单独的 topic，然后继续，再由其他 consumer 消费该 topic 单独处理（在 0.10.1 之后的版本的 Kafka 中的心跳已经交由一个单独的线程 HeartbeatThread 来提交）
-  - 数据处理耗时过长时，可能导致 consumer.poll() 循环等待过久，导致心跳无法及时发送，这种较为耗时的任务应提交给另一个线程池来异步处理（在 0.10.1 之后的版本的 Kafka 中的心跳已经交由一个单独的线程 HeartbeatThread 来提交）
-  - 在 0.10.1 之后的版本里，如果 consumer 需要处理耗时较长的任务，只需加大 [max.poll.interval.ms](http://max.poll.interval.ms) 的值来增加轮询间隔时长
-  - 如果想把 offset 保存到别的数据库里，可使用 seek() 和 ConsumerRebalanceListener 配合
-  - 让 consumer 退出循环应当调用 consumer.wakeup()
+      1. 可提交最后一个成功处理的偏移量，把未处理的消息保存到缓冲区，调用消费者pause()方法暂停轮询返回的数据，保持轮询的同时尝试重新处理，成功或者达到重试次数上限（记录错误丢弃消息），然后调用rersume()方法恢复消费者轮询数据
+      2. 可将错误写入单独的 topic，然后继续，再由其他 consumer 消费该 topic 单独处理
+
+    - 想把 offset 保存到别的数据库里，可使用 seek() 和 ConsumerRebalanceListener 配合
+
+    
 
 
 1. Producer丢失消息，从哪里分析？什么原因会导致消息丢失？解决？
@@ -2667,7 +2688,9 @@ int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] va
   - 注册消费者以及保存位移值，GroupCoordinator管理、读写
 - 源码如何设计：采用单线程来获取消息
   - 双线程
-    - 负责获取消息
+    - poll设计负责获取消息
+      - 所有逻辑都在poll的大循环中实现，包括获取Metadata、连接GroupCoordinator、发送Fetch请求、提交Offset、发送心跳，这些操作都先加入队列，之后才在poll中发送出去，其中心跳请求会加入DelayedQueue中定期出队
+      - 新版本的Kafka心跳采用了单独的线程
     - 心跳线程。规避因消息处理速度慢而下线，引发rebalance。
   - 异步非阻塞，适合流式
 - 保证消费的时序性？
@@ -2695,9 +2718,79 @@ int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] va
     - 最新消费消息的Offset与分区最老的Offset差值
     - 如果接近0，意味着一直在消息最老的消息，丢失消息
 
-### Rebalance&Coordinator
+### Coordinator
 
 - Broker有Coordinator组件，负责协调ConsumerGroup的消费情况
+
+- Consumer的两种请求
+
+  - JoinGroup：当组内成员加入组时，向Coordinator发送，上报订阅的TopicPartition
+  - Coordinator把所有Consumer订阅信息通过 JoinGroup Response，然后发给领导者，由领导者统一做出分配方案后
+  - SyncGroup：领导者向Coordinator发送 SyncGroup 请求，包含分配方案
+
+- 新成员2加入
+
+  - 寻找GroupCoordinator
+    - ConsumerCoordinator调用ensureCoordinatorReady()获得group的地址（首先调用leastLoadedNode()寻找连接最少的broker，向其发送请求寻找groupCoordinator）
+  - 发送JoinGroup
+    - client端发送JoinGroup请求，若group不存在则创建新的group，状态置为Empty
+  - Leader选举以及等待
+    - 第一个加入的member被选为consumer leader
+    - GroupCoordinator状态置为PreparingRebalance
+    - 接着会等待一定时间，等待预期的consumer陆续提交JoingGroup后，group进入CompletingRebalance状态
+    - GroupCoordinator给client返回封装有所有member的response
+  - 分配方案
+    - leader收到JoinGroup的response后，生成assignment
+    - client端向coordinator发起SyncGroup请求，若client端是leader则在sync请求中提交分配方案，follower发送的则是一份空的列表
+    - coordinator收到leader的请求后，将分配方案作为SyncGroup的response分发给follower，group状态转移为Stable
+
+  ![image-20210727203145134](0JavaSummary.assets/image-20210727203145134.png)
+
+- 组成员崩溃离组，session.timeout.ms 
+
+  ![image-20210727203353716](0JavaSummary.assets/image-20210727203353716.png)
+
+- Rebalance，Coordinator对组内成员提交位移的处理
+
+  ![image-20210727203506667](0JavaSummary.assets/image-20210727203506667.png)
+
+- 参数
+
+  - rebalance.timeout.ms，worker在rebalance后加入group的最大时间
+  - group.initial.rebalance.delay.ms，空Group接收到第一个JoinGroup后延迟多久后才开始Rebalance
+  - session.timeout.ms，心跳线程超时时间
+  - max.poll.interval.ms，执行线程超时时间
+  - Static member、Incremental Rebalance
+    - Reduce unnecessary downtime due to unnecessary partition migration: i.e. partitions being revoked and re-assigned.
+    - Better rebalance behavior for falling out members.
+
+- GroupState
+
+  1. Empty
+     - 没有任何member的group，一直保留直至所有的offsets都过期失效（offsets都定期清除后，状态转移为Dead）
+     - 这个状态也可适于仅提交offset而没有member的用法
+     - 只对JoinGroup请求有正常的响应，其他均返回错误
+     - 新member发起JoinGroup请求则转移至PreparingRebalance
+       - 当group被移除，状态转移至Dead
+  2. PreparingRebalance
+     - 对心跳请求、Sync请求返回REBALANCE_IN_PROGRESS，移除member离开group的请求，暂停新的或已存在的member发送的JoinGroup请求，直到所有预期的member都已加入
+     - 当等待时间结束前members完成Joined，状态转移至CompletingRebalance
+       - 所有members都离开了group，状态转移至Empty
+       - 当group被移除，状态转移至Dead
+  3. CompletingRebalance/AwaitingSync
+     - Group正在等待leader的分配方案，暂停follower的SyncGroup请求直到状态变成Stable
+  4. Stable
+     - 正常回复心跳请求，以当前的分配方案回复SyncGroup请求，若当前client端与coordinator的metadata匹配则以当前group metadata回复client端的JoinGroup请求
+     - member心跳异常、member离组、leader发送JoinGroup请求、follower以新的metada发起JoinGroup请求则进入PreparingRebalance状态
+     - 分区迁移导致group移除则进入Dead状态
+  5. **Dead**：group的最终状态，没有状态转移
+
+![image-20210727202239494](0JavaSummary.assets/image-20210727202239494.png)
+
+- 一个消费者组最开始是 Empty ，开始Rebalance后，处于 PreparingRebalance 状态等待成员加入，之后变更到CompletingRebalance 状态等待分配方案，最后到 Stable 状态完成。
+- 当有新成员加入或已有成员退出时，消费者组的状态从 Stable 直接跳到PreparingRebalance 状态，此时，所有现存成员就必须重新申请加入组。当所有成员都退出组后，消费者组状态变更为 Empty。
+
+### Rebalance
 
 - 坏处
   
@@ -3531,6 +3624,46 @@ public abstract long transferTo(long position, long count, WritableByteChannel t
 - `sendfile+DMA gather`方式产生2次DMA拷贝，没有CPU拷贝，而且也只有2次上下文切换。虽然极大地提升了性能，但是需要依赖新的硬件设备支持。
 
 参考：[简单易懂](https://blog.csdn.net/zhengchao1991/article/details/104524468) [大神的Linux I/O 原理和 Zero-copy 技术全面揭秘](https://mp.weixin.qq.com/s/TEUrcD4c_8Aw7bzTXr83kw)
+
+## Storm
+
+- storm总体结构
+
+  - stream 是被处理的数据，spout 是数据源，bolt 封装了数据处理逻辑
+  - worker 是工作进程，一个工作进程可包含多个 Executor 线程，Executor 是运行 spout 或bolt的处理逻辑线程，task是storm中的最小处理单元，一个executor中可包含多个task，消息分发都是从一个task到另一个task进行的
+  - stream grouping 定义了消息分发策略，定义了 bolt 节点以什么方式接收数据（shuffle grouping、fields grouping、all grouping、global grouping、none grouping、diirect grouping）
+  - topology 是一整个任务拓扑，是由于消息分组方式连接起来的 spout 和 bolt 网络
+
+  <img src="0JavaSummary.assets/120049.png" alt="img" style="zoom: 33%;" />
+
+  - Nimbus 和 Supervisor 无状态，可快速恢复，源数据存储在ZK中，worker 由 supervisor 启动，topo 由 nimbus 启动
+  - 特殊的系统 bolt：ACKer 和 Metrics
+
+- 通信机制
+
+  - 进程内用Disruptor
+    - 每个 worker 有一个独立的接收线程、发送线程，接收线程负责从接收缓冲区将数据转发至各个 Executor的 incoming-queue，发送线程则负责从 Disuptor transfer queu e读取数据发送至网络
+    - 每个 executor 有一个单独的线程处理 spout/bolt 逻辑，处理完的 tuple 被放入 out-queue 中，out-queue 中的 tuple 积累到一定的阈值后，send thread 从中取出放入 worker 的 shared transfer queue（disruptor）中等待发送
+
+  ![img](0JavaSummary.assets/120054.png)
+
+  - 进程间用 ZMQ/Netty
+
+  <img src="0JavaSummary.assets/120052.png" alt="img" style="zoom:67%;" />
+
+- ACK
+
+  - ACKer 是一个 bolt，其维护了一个 Map 存储了 root-id 到 tuple 树相关信息的映射 `{root-id {:spout-task task-id :val ack-val :failed bool-val …}}`
+  - 当 spout 创建一条新 tuple 时，会给 ACKer 发送消息，bolt 接收到该 tuple 后调用 ack 给 ACker 发送搞一条消息，同时 bolt 如果也产生了新的 tuple 往后续 bolt 发送，那么也将执行类似前面的逻辑，因此最后所有的 tuple-id 都会被异或两次，从而使得 ack-val 最中归零
+
+  <img src="0JavaSummary.assets/image-20210727205636125.png" alt="image-20210727205636125" style="zoom: 33%;" />
+
+- 反压机制
+
+  - 如果 executor 发现 recv queue 负载超过高水位值（high watermark）则通知反压线程（backpressure thread）
+  - 反压线程将反压信息写到 Zookeeper
+  - Zookeeper 上的 watch 会通知该拓扑（topo）的所有 Worker，该拓扑出现反压
+  - Spout 减缓发送 tuple 的速率
 
 ## 杂货
 
