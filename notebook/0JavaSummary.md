@@ -1458,6 +1458,15 @@ public class Semaphore implements java.io.Serializable {
       - **最终一致性**：用户只能读到某次更新后的值，但系统保证数据将最终达到完全一致的状态，只是所需时间不能保障。
       - 弱一致性
       - 顺序一致性：ZAB
+  - Zookeeper，CP 。分析A:极端情况下，不能保证每次服务请求的可用性；leader选举时集群都是不可用。ZK主要是存储Kafka元数据信息，强一致性就很重要。
+  - Kafka，CA。
+    - 分区读写由leader负责，满足Consistency原则。
+    - 分区副本机制，保证可用性A。副本分区数据与leader存在差别怎么办，怎么解决P？
+    - 尽量保持分区容错性：ISR的同步策略
+  - Eureka：AP
+  - Redis：AP，缓存，如果容忍读到过期的数据，那么C就不能满足。
+  - Mysql：CA，单机
+  - 
 
 - BASE
 
