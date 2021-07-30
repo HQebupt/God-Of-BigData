@@ -3203,20 +3203,6 @@ val builder = fetchSessionHandler.newBuilder()
 val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
 ```
 
-```scala
-val builder = fetchSessionHandler.newBuilder()
-
-// 改进后
-    /** A builder that allows for presizing the PartitionData hashmap, and avoiding making a
-     *  secondary copy of the sessionPartitions, in cases where this is not necessarily.
-     *  This builder is primarily for use by the Replica Fetcher
-     * @param size the initial size of the PartitionData hashmap
-     * @param copySessionPartitions boolean denoting whether the builder should make a deep copy of
-     *                              session partitions
-     */
-val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
-```
-
 - 背景：Our current follower replica fetching logic has huge CPU cost with num.partitions to fetch from, and it scales non-linearly as well. There are a bunch of optimizations we can consider to try to reduce its cost and hopefully make it to be linear against the num.partitions.
 - PR: Fetch session optimizations (mostly presizing the next hashmap, and avoiding making a copy of sessionPartitions, as a deep copy is not required for the ReplicaFetcher)
 
