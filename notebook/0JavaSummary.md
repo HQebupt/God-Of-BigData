@@ -347,50 +347,6 @@ ConcurrentHashMap: 数组+链表+红黑树+锁。红黑树在并发的情况下�
 
 适用于什么场景？
 
-### 四种引用
-
-- 强引用:无论什么时候都不会自动回收（场景：正常使用）
-- 软引用:空间不足才会回收对象（场景：适合缓存）
-- 弱引用:不是立刻回收而是GC发现后会在下次GC时才会回收对象。（场景：如果对象偶尔使用可WeakReference.）
-- 虚引用:必须和引用队列(ReferenceQueue)联合使用,本次GC发现立即回收对象（场景：GC里面使用？）
-
-StrongReference、WeakReference、SoftReference、PhantomReference
-
-- WeakReference 引用的对象，当没有强引用指向它后，将在 GC 时被回收；如果其作为 Map.Entry 中的key，则整个 Entry 会被移除。
-
-```java
-    Obejct reference = new Object();    
-		WeakReference<Obejct> weakRef = new WeakReference<>(reference);    
-		reference = null;    
-		System.gc(); // 被回收    
-		AssertNull(weakRef.get())
-```
-
-- SoftReference 与 WeakReference 特性类似，区别在于 SoftReference 被回收的时机是在 JVM 内存不足之时；因此适合用于做缓存
-
-```java
-		String str = new String("abc");		
-		SoftReference<String> softReference = new SoftReference<String>(str);		// 浏览器的回退可以用缓存设计：    
-		if(softReference.get() != null) {        
-      	page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存    
-    } else {        
-      page = browser.getPage();// 内存不足，软引用的对象已经回收        
-      softReference = new SoftReference(page);// 重新构建软引用    
-    }
-```
-
-- PhantomReference，调用 get 永远返回 null，用于跟踪引用何时被 enqueue 至 ReferenceQueue 中.**虚引用必须和引用队列(ReferenceQueue)联合使用**。
-
-  > 对于GC来看，当垃圾回收器准备回收一个对象时，如果发现它还有虚引用，会在回收之前，把虚引用加入到与之关联的引用队列中。
-  >
-  > 对于用户来看，如果程序发现某个虚引用已经被加入到ReferenceQueue，那么回收之前采取一些行动。
-
-```java
-String str = new String("abc");  
-ReferenceQueue queue = new ReferenceQueue();    // 创建虚引用，要求必须与一个引用队列关联    
-PhantomReference pr = new PhantomReference(str, queue);
-```
-
 ### 多线程
 
 - ThreadLocalRandom 、ThreadLocal，解决多线程访问同一个变量的时候需要同步，让每个线程都拷贝一份变量，自己操作自己。
@@ -1199,30 +1155,78 @@ public class Semaphore implements java.io.Serializable {
 
 <img src="0JavaSummary.assets/image-20210712082721625.png" alt="image-20210712082721625" style="zoom: 33%;" />
 
+
+
+### 四种引用
+
+- 强引用:无论什么时候都不会自动回收（场景：正常使用）
+- 软引用:空间不足才会回收对象（场景：适合缓存）
+- 弱引用:不是立刻回收而是GC发现后会在下次GC时才会回收对象。（场景：如果对象偶尔使用可WeakReference.）
+- 虚引用: 主要用来跟踪对象被垃圾回收的活动。必须和引用队列(ReferenceQueue)联合使用,本次GC发现立即回收对象（场景：GC里面使用？）
+
+StrongReference、WeakReference、SoftReference、PhantomReference
+
+- SoftReference  空间不足才会回收对象（场景：适合缓存）
+
+```java
+		String str = new String("abc");		
+		SoftReference<String> softReference = new SoftReference<String>(str);		// 浏览器的回退可以用缓存设计：    
+		if(softReference.get() != null) {        
+      	page = softReference.get(); // 内存充足，还没有被回收器回收，直接获取缓存    
+    } else {        
+      page = browser.getPage();// 内存不足，软引用的对象已经回收        
+      softReference = new SoftReference(page);// 重新构建软引用    
+    }
+```
+
+- WeakReference 引用的对象，当没有强引用指向它后，将在 GC 时被回收；如果其作为 Map.Entry 中的key，则整个 Entry 会被移除。
+
+```java
+    Obejct reference = new Object();    
+		WeakReference<Obejct> weakRef = new WeakReference<>(reference);    
+		reference = null;    
+		System.gc(); // 被回收    
+		AssertNull(weakRef.get())
+```
+
+- PhantomReference，调用 get 永远返回 null，用于跟踪引用何时被 enqueue 至 ReferenceQueue 中.**虚引用必须和引用队列(ReferenceQueue)联合使用**。
+
+  > 对于GC来看，当垃圾回收器准备回收一个对象时，如果发现它还有虚引用，会在回收之前，把虚引用加入到与之关联的引用队列中。
+  >
+  > 对于用户来看，如果程序发现某个虚引用已经被加入到ReferenceQueue，那么回收之前采取一些行动。
+
+```java
+String str = new String("abc");  
+ReferenceQueue queue = new ReferenceQueue();    // 创建虚引用，要求必须与一个引用队列关联    
+PhantomReference pr = new PhantomReference(str, queue);
+```
+
+
+
 ### 结构、回收算法
 
 - 基本结构：程序计数器、JVM 栈、native 栈、堆、运行时常量池
 - 分区：垃圾收集器把堆分为新生代、老年代、永久代，1.8 版本后引入了 MetaSpace 替换永久代，本地内存。
-- 直接内存: NIO，`DirectByteBuffer分配
+- 直接内存: NIO，DirectByteBuffer分配
 - 基本回收算法：标记清除，标记整理，复制
-
 - 对象分配策略
   - 优先分配在新生代
   - 大对象直接老年代(-XX:PretenureSizeThreshold)
   - 长时间存活对象进入老年代(- XX:MaxTenuringThreshold)
-  - 若 Survivor 中相同年龄的对象大小和 > Survivor 空间的一半，则年龄大于等于该值的对象直接进入老年代
+  - 动态年龄判定：若 Survivor 中相同年龄的对象大小和 > Survivor 空间的一半，则年龄大于等于该值的对象直接进入老年代
   - 空间分配担保策略
     - YGC 前 JVM 检查老年代的连续空间是否大于新生代所有对象总和
     - 若上述为否且 HandlePromotionFailure 为 true ，则检查老年代连续空间是否大于每次晋升对象的平均大小
     - 若上述为否，或 HandlePromotionFailure 为 false ，则触发 FullGC
-
 - GC Roots和对象路由
-  - GC Roots 包括：本地变量、静态变量、JNI 引用等
+  - GC Roots 包括：活动线程相关的各种引用、静态变量、JNI 引用等
   - 垃圾收集器内有一组成为 OopMap 的数据结构存储了所有对象的地址
+  - <img src="0JavaSummary.assets/Cgq2xl4hefWAWKFZAAMwndGjScg437.png" alt="img" style="zoom:50%;" />
 - SafePoint
   - 以“是否具有让程序进入长时间运行的特征”作为标准，如方法跳转、异常跳转
   - GC 过程中用户线程的中断方式是主动式中断，具体行为是用户线程不断轮训收集器的中断标志，如果为真则就近的安全点中断自身
   - 对于已挂起的用户线程，其在挂起之前，先将自身标记为“已进入安全域”（Safe Region），解决用户线程在 Sleep、Blocked 时无法响应 JVM 中断请求而导致 JVM 等待的问题
+- TLAB 的全称是 Thread Local Allocation Buffer，默认给每个线程开辟一个 buffer 区域（Eden 区），加速对象分配。
 
 ### 类加载
 
@@ -1429,9 +1433,9 @@ public class Semaphore implements java.io.Serializable {
   - G1 Failure：EvacuationFailure、Humongous Object Fragmentation
 - G1：MixedGC 慢、UPdateRS、ScanRS 慢、Object Copy 慢
 - MixedGC 调优：
-  - -XX:G1MixedGCCountTarget，增加次数降低单次延迟
+  - -XX:G1MixedGCCountTarget，一次并发标记之后，最多执行 Mixed GC 的次数。增加次数，降低单次延迟
   - -XX:G1MixedGCLiveThresholdPercent，避免将较满的 Region 加入候选
-  - -XX:G1HeapWastePercent，增加堆的冗余度
+  - -XX:G1HeapWastePercent，增加堆的冗余度，老年代的垃圾占比5%，超过阈值，mixed GC
 - 更造触发 GC 避免单次GC停顿过长
   - -XX:-G1UseAdaptiveIHOP and -XX:InitiatingHeapOccupancyPercent
 - sys、user、real
@@ -1445,6 +1449,19 @@ public class Semaphore implements java.io.Serializable {
 - -XX:+AlwaysPreTouch，启动的时候真实的分配物理内存给JVM
   - 新生代对象晋升，要为老年代先分配物理内存，影响了新生代GC的效率。
   - 优点：加快代码运行效率，缺点：启动时间变慢。
+
+
+
+### ZGC
+
+- 目标
+  - STW不超 10ms
+  - 不管多大的堆都能保持在 10ms 以下
+  - 最大支持 4T堆
+
+- 概述
+  - 内存分成一个个 page，清理压缩
+  - 直接利用对象的引用指针，用来标识对象的状态
 
 ## 4 分布式协议
 
