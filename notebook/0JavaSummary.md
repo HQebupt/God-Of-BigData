@@ -2490,7 +2490,17 @@ Netty 通过提供的 Composite（组合）和 Slice（拆分）单个传输的�
 
     ​	<img src="0JavaSummary.assets/image-20210725234557899.png" alt="image-20210725234557899" style="zoom:40%;" />
 
-    
+
+**Follower拉取leader消息的源码表述**
+
+- AbstractFetcherThread 线程的 doWork ，入口方法
+  - 日志截断（truncate）+ 日志获取（buildFetch）+ 日志处理（processPartitionData）
+  - truncate 方法：根据 Leader 副本返回的位移值和 Epoch 值执行本地日志的截断操作。
+  - buildFetch 方法：为一组特定分区构建 FetchRequest 对象所需的数据结构。
+  - processPartitionData 方法：处理从 Leader 副本获取到的消息，主要是写入到本地日志中。
+- 子类 ReplicaFetcherThread 类
+  - Follower 副本利用 ReplicaFetcherThread 线程实时地从 Leader 副本拉取消息并写入到本地日志，
+    从而实现了与 Leader 副本之间的同步。
 
 ### Leader Epoch
 
@@ -2520,12 +2530,15 @@ Leader 和 Follower 的消息序列在实际场景中不一致，如何确保一
 
   - 起始位移（Start Offset）。Leader 副本在该 Epoch 值上写入的首条消息的位移。
   - **每个分区都缓存 Leader Epoch 数据**，定期持久化到checkpoint 文件
-
 - 如何解决？
 
   - 每次活过来的follower去Leader拉取Leader的LEO值，以这个值来作为判断是否做同步的标准。
 
-  
+
+- 典型的应用场景：
+  - 替换高水位值在日志截断中的作用。
+  - 当分区存在 Leader Epoch 值时，将副本的本地日志截断到 Leader Epoch 对应的最新位移值处，` truncateToEpochEndOffsets`
+  - 如果分区不存在对应的 Leader Epoch 记录，使用原来的高水位机制，将日志调整到高水位值处。`truncateToHighWatermark`
 
 ### 无消息丢失
 
@@ -2811,6 +2824,14 @@ int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] va
 
 - 一个消费者组最开始是 Empty ，开始Rebalance后，处于 PreparingRebalance 状态等待成员加入，之后变更到CompletingRebalance 状态等待分配方案，最后到 Stable 状态完成。
 - 当有新成员加入或已有成员退出时，消费者组的状态从 Stable 直接跳到PreparingRebalance 状态，此时，所有现存成员就必须重新申请加入组。当所有成员都退出组后，消费者组状态变更为 Empty。
+
+
+
+> 项目经验来了：log cleaner 线程挂掉，导致消费端出现`Marking Coordinator Dead!` 
+>
+> 原因是：log cleaner线程挂掉---> offset文件越来越多--> broker 内存维护了offsetMap，这Map越来越大，导致offsetMap无法在添加数据---> 导致broker不承认自己是coordinator。 ---> 而消费者找Coordinator的时候，又找到这个broker。---> 导致这个consumer就无法消费任何数据，出现上面的错误。
+
+
 
 ### Rebalance
 
