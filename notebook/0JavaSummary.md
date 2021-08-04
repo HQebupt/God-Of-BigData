@@ -1838,6 +1838,10 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
 - 领导者节点作为唯一提议者。
 
+### 4种协议对比
+
+<img src="0JavaSummary.assets/121186.png" alt="img" style="zoom:120%;" />
+
 ## ZAB
 
 ### 0定义
@@ -1907,34 +1911,77 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
 
   >  Phase 1 和 2 对于集群内的相互一致性很重要，尤其是从故障中恢复时
 
-- Phase 1 发现（目的：从 quorum 中找到最完备的 F.history）
 
-  - **准leader**收集节点的epoch值，发送epoch+1
-  - follower回复ACK，带上ZXID和历史事务日志（F.History）
-  - **准leader** 更新自身的ZXID和事务日志
-  - quorum 做出保证：quorum中至少有一个节点（其 epoch 最大, ZXID最大）的 history queue 是最新的，完整的
+#### Phase 0 选举
 
-  <img src="../120367.png" alt="img" style="zoom:67%;" />
+  - 选票数据结构
+    - logicClock：每个服务器维护一个自增整数，表示该服务器发起的第几轮投票
+    - state：服务器当前状态
+    - self_id：服务器的 myid
+    - self_zxid：服务器上接收到的事务的最大 zxid
+    - vote_id：被推举的服务器 myid
+    - vote_zxid：被推举的服务器上保存的事务的最大 zxid
+    
+  - 投票流程
+    - 自增选举轮次
+      - 一次有效的投票必须在同一轮次中，开始新一轮投票时，服务器先对自己的logicClock自增
+    - 初始化选票
+      1. 服务器广播自己的选票前，先将自己的投票箱清空
+      2. 投票箱用于记录收到的选票，如：服务器2投票给服务器3，服务器3投票给服务器1，则服务器1的投票箱内将存储(2, 3)，(3, 1)，(1, 1)
+      3. 票箱中只记录投票者的最后一票，如投票者A更新自己的选票，其他服务器收到该选票后会在更新票箱中A的选票
+    - 发起初始化选票
+      - 每个服务器最开始通过广播把票投给自己
+    - 接收外部投票
+      - 服务器尝试从其他服务器获得投票，计入自己的投票箱内
+      - 如果无法获得任何外部选票，则确认自己是否与集群中其他的服务器保持着有效的连接；如果是则再次发送自己的投票；否则马上建立连接
+    - 判断选举轮次
+      - 收到外部投票后，首先根据投票信息中所包含的 logicClock 来进行不同处理：
+        1. 外部投票的 logicClock 大于自身的 logicClock，说明该服务器的选举轮次落后于其他服务器，立即清空自己的投票箱，并把自己的 logicClock 更新为接收到的 logicClock，然后再对比自己之前的投票与收到的投票以确定是否需要变更自己的投票，最终再次将自己的投票广播出去
+        2. 外部投票的 logicClock 小于自身的 logicClock，当前服务器直接忽略该选票，继续处理下一个投票
+        3. 外部投票的 logickClock 自身的相等，则进行选票 PK
+    - 选票PK
+      - 选票 PK 基于（self_id, self_zxid）与（vote_id, vote_zxid）的对比
+        1. 外部投票的 logicClock 大于自身的，则将自己的 logicClock 及自己的选票的 logicClock 变更为收到的 logicClock
+        2. 若 logicClock 一致，则对比二者的 vote_zxid，若外部投票的 vote_zxid 比较大，则将自己的票中的 vote_zxid 与 vote_myid 更新为收到的票中的 vote_zxid 和 vote_myid 并广播出去，另外将收到的票以及自己更新后的票放入自己的票箱. 如果票箱内已存在（self_myid, self_zxid）相同的选票，则直接覆盖
+        3. 若二者的 vote_zxid 一致，则比较二者的 vote_myid，若外部的投票的 vote_myid 比较大，则将自己的票种的 vote_myid 更新为收到的票种的 vote_myid 并广播出去，另外将受到的票以及自己更新后的票放入自己的票箱
+    - 统计选票
+      - 如果已经确定过半服务器认可了自己的投票（可能是更新后的投票），则投票终止；否则继续接受其他服务器的投票
+    - 更新服务器状态
+      - 投票终止后，服务器开始更新自身状态. 若过半票投给了自己，则将自己的服务器状态更新为LEADING，否则将自己的状态更新为 FOLLOWING
 
-  > 注：理论上被选举出来的 prospective leader 应具有最大的 zxid，即接收了最新的事务，为什么还要向 quorum 中的 follower 获取历史事务？
+#### Phase 1 发现
 
-- Phase 2 同步（目的：将'发现'步骤中获得的 F.history 作为提案提出）
+（目的：从 quorum 中找到最完备的 F.history）
 
-  - 准leader发送同步信息，将历史事务作为提案
-  - 半数Follower同步成功，准Leader成为Leader。
-    -  follower 自身的事务历史序列落后，认可 leader 
-  - 同步完成，恢复（recovery）阶段结束 
+- **准leader**收集节点的epoch值，发送epoch+1
+- follower回复ACK，带上ZXID和历史事务日志（F.History）
+- **准leader** 更新自身的ZXID和事务日志
+- quorum 做出保证：quorum中至少有一个节点（其 epoch 最大, ZXID最大）的 history queue 是最新的，完整的
+
+<img src="0JavaSummary.assets/120367-1628044937992.png" alt="img" style="zoom:67%;" />
+
+> 注：理论上被选举出来的 prospective leader 应具有最大的 zxid，即接收了最新的事务，为什么还要向 quorum 中的 follower 获取历史事务？
+
+
+
+#### Phase 2 同步
+
+（目的：将'发现'步骤中获得的 F.history 作为提案提出）
+   - 准leader发送同步信息，将历史事务作为提案
+   - 半数Follower同步成功，准Leader成为Leader。
+   - follower 自身的事务历史序列落后，认可 leader 
+   - 同步完成，恢复（recovery）阶段结束 
 
 <img src="0JavaSummary.assets/120365.png" alt="img" style="zoom:67%;" />
 
+#### Phase 3 广播
 
-  - Phase 3 广播
-    - leader接受client写请求
-    - 2PC提交：
-      - Leader保留提交日志，发送Propose广播给Follower
-      - Follower确认，回ACK
-      - Leader发送Commit消息，提交事务
-    - 对于 observer，leader 会发送 inform 消息，其中包含提议的内容（follower）
+- leader接受client写请求
+- 2PC提交：
+  - Leader保留提交日志，发送Propose广播给Follower
+  - Follower确认，回ACK
+  - Leader发送Commit消息，提交事务
+- 对于 observer，leader 会发送 inform 消息，其中包含提议的内容（follower）
 
 <img src="0JavaSummary.assets/120363.png" alt="img" style="zoom:67%;" />
 
@@ -1976,60 +2023,104 @@ leader在请求过程中，任一时候crash，raft是如何容错的，保障�
     - 服务端SessionTracker有一个单独的线程专门进行会话超时检查，以ExpirationInterval作为时间点来触发检查，每次检查就检查过期的桶中所有剩下的未被迁移的会话即可
   - 当客户端与服务端网络断开，客户端会自动反复重连直到连上集群中的一台机器，如果在会话超时时间内重新连上，则状态改为 *CONNECTED*（CONNECTION_LOSS），如果超过超时时间才连上，则为 *EXPIRED*（SESSION_EXPIRED）
 
-- **ZAB Leader选举(面试重点：ZAB的领导者选举过程 TODO)**
+  
 
-- <img src="0JavaSummary.assets/image-20210630231038099.png" alt="image-20210630231038099" style="zoom:50%;" />
+### ZAB Leader选举
+见ZAB的集群崩溃恢复
 
-  - 服务器状态
-    - LOOKING：Leader 选举阶段
-    - FOLLOWING：跟随者状态
-    - LEADING：领导者状态
-    - OBSERVING：观察者状态
-  - 选票数据结构
-    - logicClock：每个服务器维护一个自增整数，表示该服务器发起的第几轮投票
-    - state：服务器当前状态
-    - self_id：服务器的 myid
-    - self_zxid：服务器上接收到的事务的最大 zxid
-    - vote_id：被推举的服务器 myid
-    - vote_zxid：被推举的服务器上保存的事务的最大 zxid
-  - 投票流程
-    - 自增选举轮次
-      - 一次有效的投票必须在同一轮次中，开始新一轮投票时，服务器先对自己的logicClock自增
-    - 初始化选票
-      1. 服务器广播自己的选票前，先将自己的投票箱清空
-      2. 投票箱用于记录收到的选票，如：服务器2投票给服务器3，服务器3投票给服务器1，则服务器1的投票箱内将存储(2, 3)，(3, 1)，(1, 1)
-      3. 票箱中只记录投票者的最后一票，如投票者A更新自己的选票，其他服务器收到该选票后会在更新票箱中A的选票
-    - 发起初始化选票
-      - 每个服务器最开始通过广播把票投给自己
-    - 接收外部投票
-      - 服务器尝试从其他服务器获得投票，计入自己的投票箱内
-      - 如果无法获得任何外部选票，则确认自己是否与集群中其他的服务器保持着有效的连接；如果是则再次发送自己的投票；否则马上建立连接
-    - 判断选举轮次
-      - 收到外部投票后，首先根据投票信息中所包含的 logicClock 来进行不同处理：
-        1. 外部投票的 logicClock 大于自身的 logicClock，说明该服务器的选举轮次落后于其他服务器，立即清空自己的投票箱，并把自己的 logicClock 更新为接收到的 logicClock，然后再对比自己之前的投票与收到的投票以确定是否需要变更自己的投票，最终再次将自己的投票广播出去
-        2. 外部投票的 logicClock 小于自身的 logicClock，当前服务器直接忽略该选票，继续处理下一个投票
-        3. 外部投票的 logickClock 自身的相等，则进行选票 PK
-    - 选票PK
-      - 选票 PK 基于（self_id, self_zxid）与（vote_id, vote_zxid）的对比
-        1. 外部投票的 logicClock 大于自身的，则将自己的 logicClock 及自己的选票的 logicClock 变更为收到的 logicClock
-        2. 若 logicClock 一致，则对比二者的 vote_zxid，若外部投票的 vote_zxid 比较大，则将自己的票中的 vote_zxid 与 vote_myid 更新为收到的票中的 vote_zxid 和 vote_myid 并广播出去，另外将收到的票以及自己更新后的票放入自己的票箱. 如果票箱内已存在（self_myid, self_zxid）相同的选票，则直接覆盖
-        3. 若二者的 vote_zxid 一致，则比较二者的 vote_myid，若外部的投票的 vote_myid 比较大，则将自己的票种的 vote_myid 更新为收到的票种的 vote_myid 并广播出去，另外将受到的票以及自己更新后的票放入自己的票箱
-    - 统计选票
-      - 如果已经确定过半服务器认可了自己的投票（可能是更新后的投票），则投票终止；否则继续接受其他服务器的投票
-    - 更新服务器状态
-      - 投票终止后，服务器开始更新自身状态. 若过半票投给了自己，则将自己的服务器状态更新为LEADING，否则将自己的状态更新为 FOLLOWING
+### 脑裂
 
-- 数据同步
+- 现象：2个leader
+  - 假死：由于心跳超时认为Leader死了，但Leader还存活着。
+  - 脑裂：假死，发起新的Leader选举。但旧的Leader网络又通了，导致出现了两个Leader 。客户端可以访问到2个leader
+- 原因：
+  - ZooKeeper集群和ZooKeeper client判断超时并不能做到完全同步
+- 影响：
+  - 数据不一致
+- 常规思路：
+  - Quorums（法定人数）方式：半数+1的原则。防止“脑裂”默认采用的方法。
+    - 新Leader产生会生成epoch
+    - Follower确认了新Leader的存在，拒绝小于epoch的所有请求
+    - 旧Leader使用旧的epoch，发出的请求被拒绝
+  - Redundant communications（冗余通信）
+    - 添加冗余的心跳线，例如双线条线，尽量减少“裂脑”发生机会。
+  - Fencing（共享资源）方式
+    - 能够获得共享资源的锁的就是Leader，看不到共享资源的，就不在集群中。(分布式锁？)
+  - 仲裁机制方式
+    - 例如设置参考IP（如网关IP），当心跳线完全断开时，2个节点都各自ping一下 网关IP，不通则表明断点就出在本端，主动放弃竞争，释放共享资源，重启。
+    - 能够ping通参考IP可以继续竞争
+  - 启动磁盘锁定
+    - 正在服务一方锁住共享磁盘，“裂脑”发生时，让对方完全“抢不走”共享磁盘资源。
+    - 如果占用共享盘的一方不主动“解锁”，另一方就永远得不到共享磁盘。
+    - 假如服务节点突然死机或崩溃，就不可能执行解锁命令。
+      - 设计了“智能”锁。即正在服务的一方只在发现心跳线全部断开（察觉不到对端）时才启用磁盘锁。平时就不上锁了。
 
-  - 几个定义
-    - peerLastZXID：learner 服务器最后处理的 ZXID
-    - miniCommittedLog：leader outstanding proposals queue committedLog 中最小的 ZXID
-    - maxCommittedLog：leader outstanding proposals queue committedLog 中最大的 ZXID
-  - 直接差异化同步（DIFF同步）：peerLastZXID ∈ (minCommittedLog, maxCommittedLog)
-  - 先回滚在差异化同步（TRUNC+DIFF同步），用于Leader宕机时没有成功发起 roposal 但已经将事务记录到本地事务日志中，这时重启服务后，需要先回滚，再做DIFF同步：peerLastZXID ∉ F.history
-  - 全量同步（SNAP同步）：peerLastZxid < minCommittedLog || (leader.outstandingProposalsQueue == null && peerLastZXID != lastProcessedZXID)
+- 解决方法
+  - Follower节点准备切换成Leader时，sleep 超时时间，确保旧Leader完全shutdown。（sleep时，服务不可用，但是数据一致性保证 CP）
+  - Quorums（法定人数）方式：半数+1的原则
+    - 新Leader产生会生成epoch
+    - Follower确认了新Leader的存在，拒绝小于epoch的所有请求
+    - 旧Leader使用旧的epoch，发出的请求被拒绝
 
-<img src="0JavaSummary.assets/121186.png" alt="img" style="zoom:120%;" />
+### 集群故障
+
+- 现象：3.4.9 version,  连接ZK超时，发现Zookeeper Server not running，某个节点重启无法恢复，后面出现整个集群无法启动
+
+```
+[myid:5] - WARN  [NIOServerCxn.Factory:0.0.0.0/0.0.0.0:2181:NIOServerCnxn@362] - Exception causing close of session 0x0 due to java.io.IOException: ZooKeeperServer not running
+```
+
+- 原因
+
+  - Zookeeper的快照文件snapshot特别大，一个snapshot就6G，并且几分钟就生成一个snapshot。
+
+  - 集群模式下，follower节点需要获取leader节点的snapshot，必须在initLimit时间，否则无法启动Zookeeper
+
+  - ```shell
+    tickTime=2000 # 2000ms
+    initLimit=10 # The number of ticks that the initial synchronization phase can take
+    syncLimit=5 # The number of ticks that can pass between sending a request and getting an ack
+    ```
+
+  - syncLimit配置为5，表示sync的timeout有5个tick
+
+  - 比如zk的data数据比较大，在10S内不一定能同步完成，每次zk选举都会同步data,由于syncLimit设置的太短，失败之后再次重新选举，然后再次超时，导致集群不可用
+
+- 解决
+  - 调大initLimit
+  
+  - 调大syncLimit
+  
+  - ```shell
+    autopurge.snapRetainCount=60 
+    autopurge.purgeInterval=48
+    # 保留48小时内的日志，并且保留60个文件
+    ```
+
+​    参考：[Sudden crash of all nodes in the cluster](https://issues.apache.org/jira/browse/ZOOKEEPER-2104?attachmentOrder=desc)
+
+### ZK挂原因
+
+zookeeper集群中leader和follower同步数据的极限值是500M，这500M的数据，加载后，大约占用3G内存
+
+- 数据过大，在每次选举之后，需要从leader同步到follower，2个问题： 
+  - 网络传输超时，因为文件过大，传输超过最大超时时间，造成TimeoutException，从而引起重新选举。
+  - 如果调大这个超时值，则很可能达到磁盘读写的上限，目前，每像精卫、tbschedule3等，都有大量的zk写入，这些会触发频繁的磁盘写操作，一旦达到io上限值，就会导致超时，进而触发重新选举或直接导致系统崩溃。
+  - 导致zookeeper集群在选举和数据同步之间陷入死循环
+- 解决思路
+  - 加zookeeper server机器提高性能：注意：加zookeeper server机器提高的只是读性能，但机器越多，多写问题就越严重，系统也越容易挂掉。
+  - 冗余一个集群，作为当前集群的备份：冗余出来的集群可以比较小，平时并不服务，只有当主集群挂掉时，再自动切换提供服务。这种集群级别的冗余貌似可行，其实也有问题，导致这种方案可行性也不高，关键问题就在于，需要将数据从主集群的leader实时同步到备份集群，这就存在一个IO问题，如果数据量大，异常存在网络超时和IO压力大问题，如果单独提供一个方案实现从主集群leader到备份集群的高速同步，那就可以直接用于解决主集群之间挂掉的问题了，更不需要备份集群了。另外，冗余物理机作为备份，绝大多数情况下，这个物理机都可能是不提供服务的，所以有资源浪费的问题。
+  - 细化zk集群：为防止其它业务的影响。如果你的应用强依赖zookeeper，则应该申请机器资源，单独配置zookeeper服务器，防止其他应用的影响。这是目前比较可行的解决方案。
+  - 多机房分布：zookeeper存在一个要求，必须有多于n+1台机器存活，否则整个集群挂掉（zookeeper通过这种方式，牺牲了稳定性，但保证了数据一致性）。在目前阿里的双机房策略下，无论两个机房怎么分配，2n+1台机器在两个机房中，都会存在一个机房的机器数大于n+1的问题，如果这个机房挂掉或机房切换，都可能导致整个zk集群挂掉。如果想要保住zk集群稳定性，就必须至少有3个机房，这样一个机房挂掉时，可以保证仍然有n+1台机器存活。这种方案在以后单元化推广开之后还有可能，在目前双机房情况下，无解。
+- 建议
+  - 能不用zookeeper，就不用zookeeper，如果一定要用，尽量不要强依赖zookeeper；
+  - 如果你要用到分布式锁，zookeeper是个不错的选择，如果不需要分布式锁，你应该优先考虑不用zookeeper；
+  - 采用监听方式，而不是主动查询方式，相信zookeeper的监听推送吧，只要你实现的代码没问题，它还是很稳定的；
+  - 不要对zookeeper频繁写入，它只应该存储控制信息和配置信息，也就是说，它更多应该用来做读操作。
+  - 不要把zookeeper作为数据存储器。
+  - 不要与那些大应用共用一个zookeeper集群，你可能会被它拖挂的。
+
+- 参考：[Zookeeper一般挂掉的原因](https://www.jianshu.com/p/f30ae8e75d6d)
 
 ## 5 Netty
 
