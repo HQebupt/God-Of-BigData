@@ -3789,6 +3789,30 @@ public abstract long transferTo(long position, long count, WritableByteChannel t
 
 ## 项目
 
+###  内存泄露
+
+- 背景
+  - Test service上线10多天，服务接口无法reponse或者response时间太长，堆大小设置是4G. 
+
+- 分析
+  - top free df
+    - CPU 500%，正常情况下，不到几十
+    - 死循环，or 大量Full GC.
+  - jstack 分析线程
+  - jstat -gc pid 
+    - 1s一次Full GC，推断内存泄露
+  - `jmap -dump:format=b,file=heap.log pid`, MAT工具分析，选择内存泄露
+    - 技巧：堆文件太大，gzip压缩，推荐-6.
+    - JSONObject对象占用 96%
+    - 项目里全局搜索对象名， Bean 对象，然后定位到 Map 。
+  - 原因分析：
+    - JSONObject是每次探测接口响应的结果
+    - 每次探测完都塞到 ArrayList 里去分析
+    - ArrayList 又被存储到Map
+    - 由于 Bean 对象不会被回收，这个属性没有清除逻辑，所以时间越长，这个 Map 越来越大，直至将内存占满。
+  - 解决
+    - 业务改进，Map分析完，添加清除逻辑
+
 ### 内存浪费
 
 - 背景
@@ -3807,20 +3831,81 @@ public abstract long transferTo(long position, long count, WritableByteChannel t
     - 用户：按需分配
     - OLS: 不在加倍1.25
     - Yarn：1G改为128M为最小的分配单位，细粒度分配资源。
-      - 内存资源：**进程监控方案**，内存过量的标准
+      - 内存资源：**进程监控方案**，内存过量的标准如下：
       - 如果一个Container对应的所有进程（年龄大于0）总内存超过最大值的2倍
 
       - 或者所有年龄大于1的进程总内存量超过最大值	
 - 结果
-  - 提高内存使用率到80%，平均使用率75%
+  - 提高内存使用率到80%，平均使用率65%
   - 节约了1T的内存空间，不需要扩容机器
 
 ### 工作挑战
 
 * S: Loris系统，第一版本后，核心成员相继离职，我们接受这个项目，一来就是性能问题
+  * 用户登陆慢，LDAP Server
+  * 查询慢，并且不准确
+  * 查看历史测试结果，慢30s
+  * 后来，Test service内存泄露
 * T: 分页面解决核心问题
+  * 登陆页面
+  * Inventory页面
+  * Workflow test case 页面
+  * Test Service页面
 * A: Manager是上海，remote，文档和代码，熟悉文档、代码、发布流程、业务。细化问题，突出优先级，分模块
-* R:Invertery、Reservation服务提升，用户满意度提高。半个月熟悉，不到一个月上线调优。
+* R:Invertery、Reservation服务提升，用户满意度提高。半个月熟悉，不到一个月上线调优，服务质量提升。
+
+### 增量构建
+
+- 背景
+  - 所有代码集中在一个repository，20+服务
+  - 开发改动代码，自己测试一下，需要所有服务重新部署，20分钟
+- 立项、定义目标
+  - 缩短部署服务时间，能否只部署改动的服务
+- 实施
+  - 分析pom文件，解析项目间依赖关系，生成依赖关系图
+  - git revision 可以知道某个目录是否发生更改，把revision信息记录到docker image的tag里面。
+  - 这样，当一个服务修改后，只需要重新部署依赖它的相关服务。
+  - 实现了项目的增量构建
+- 结果
+  - 平均缩短时间为2分钟，节约90%的构建部署时间，提升开发测试效率。
+
+### 幂等性设计
+
+**对于一个接口，如何做幂等性设计？**
+
+- 核心思想是利用唯一的ID来标识某一种操作，比如下单。
+  - mysql自增ID可以实现
+  - 分布式唯一ID可以实现
+  - 前端可以利用token过滤一些不必要的重试操作
+
+**如何在分布式系统生成唯一的ID**
+
+- UUID，一组32位数的16进制数字，相对比较长，无序的。
+- snowflake：时间有序
+
+**snowflake的结构**
+
+长度是1个long型的数字，64位。**snowflake的结构如下(每部分用-分开):**
+
+```
+0 - 0000000000 0000000000 0000000000 0000000000 0 - 00000 - 00000 - 000000000000
+```
+
+- 第1位为未使用，
+- 41bit 保存时间戳，精确到毫秒。最大可使用的年限是69年。
+- 10bit 的机器位，能部属在1024台机器节点来生成ID。
+- 12bit 的序列号，一毫秒最大生成唯一ID的数量为4096个。
+
+> 一共加起来刚好64位，为一个Long型。(转换成字符串长度为18).
+>
+> snowflake生成的ID整体上按照时间自增排序，并且整个分布式系统内不会产生ID碰撞（由datacenter和workerId作区分），并且效率较高。据说：snowflake每秒能够产生26万个ID。
+
+Code : [snow flake](https://github.com/HQebupt/app/blob/master/src/main/java/design/SnowFlake.java)
+
+- 缺点
+  - 依赖机器时钟，如果时钟回拨，导致生成ID重复，打破递增属性
+    - 如果发现有时钟回拨，时间很短比如5毫秒,就等待，然后再生成。或者就直接报错，交给业务层去处理。
+    - 放入到Redis缓存
 
 ## 杂货
 
