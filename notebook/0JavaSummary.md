@@ -2479,7 +2479,7 @@ Netty 通过提供的 Composite（组合）和 Slice（拆分）单个传输的�
 
 <img src="0JavaSummary.assets/image-20210723144505788.png" alt="image-20210723144505788" style="zoom:50%;" />
 
-### 物理存储
+### 日志格式
 
 - 文件格式和Request消息一致，因此可以使用ZeroCopy技术直接存储在磁盘上
 
