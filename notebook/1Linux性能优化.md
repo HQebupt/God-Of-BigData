@@ -335,6 +335,11 @@ $ pidstat -w -u 1
 
 <img src="1Linux性能优化.assets/image-20210808195127355.png" alt="image-20210808195127355" style="zoom:50%;" />
 
+- Linux 采用多种缓存机制，来优化 I/O 的效率
+
+  - 页缓存、索引节点缓存、目录项缓存：为了优化文件（VFS)访问的性能，采用多种缓存机制，减少对下层块设备的直接调用。
+  - 缓冲区：为了优化块设备(比如本地磁盘设备和网络存储)的访问效率，使用**缓冲区**来缓存块设备的数据。
+
 - 文件系统分类
 
   - 基于磁盘的文件系统：磁盘挂载
@@ -422,5 +427,68 @@ $ pidstat -w -u 1
     # 目录项和索引节点占用了最多的 Slab 缓存,共23M
     ```
 
-    
+### 磁盘性能指标
+
+- 基本指标
+  - 使用率，磁盘处理 I/O 的时间百分比。过高的使用率（> 80%），I/O 存在瓶颈。
+  - 饱和度，磁盘处理 I/O 的繁忙程度。当饱和度为 100% 时，磁盘无法接受新的 I/O 请求。
+  - IOPS（Input/Output Per Second），每秒的 I/O 请求数。
+  - 吞吐量，每秒的 I/O 请求大小。
+  - 响应时间， I/O 请求从发出到收到响应的间隔时间。
+
+  > 在数据库、大量小文件等随机读写比较多的场景，IOPS 更能反映系统的整体性能；
+  >
+  > 在多媒体等顺序读写较多的场景中，吞吐量更能反映系统的整体性能。
+
+- 基准测试: 用`fio`
+
+- I/O 观测: 用`iostat` （原始数据来自`/proc/diskstats`）
+
+  <img src="1Linux性能优化.assets/image-20210810193953145.png" alt="image-20210810193953145" style="zoom:50%;" />
+
+<img src="1Linux性能优化.assets/image-20210810194025580.png" alt="image-20210810194025580" style="zoom:50%;" />
+
+- 每个指标含义都很重要
+  - %util ，磁盘 I/O 使用率
+  - r/s+ w/s ， IOPS
+  - rkB/s+wkB/s ，吞吐量
+  - r_await+w_await ，响应时间
+  - 不能直接得到磁盘饱和度
+
+<img src="1Linux性能优化.assets/image-20210810194123252.png" alt="image-20210810194123252" style="zoom:50%;" />
+
+### 进程 I/O 观测
+
+- 进程的 I/O 情况，使用 `pidstat 和 iotop `
+
+```shell
+$ pidstat -d 1 
+13:39:51      UID       PID   kB_rd/s   kB_wr/s kB_ccwr/s iodelay  Command 
+13:39:52      102       916      0.00      4.00      0.00       0  rsyslogd
+```
+
+- pidstat
+  - 用户 ID（UID）和进程 ID（PID） 。
+  - 每秒读取的数据大小（kB_rd/s）
+  - 每秒发出的写请求数据大小（kB_wr/s）
+  - 每秒取消的写请求数据大小（kB_ccwr/s） 
+  - 块 I/O 延迟（iodelay），包括等待同步块 I/O 和换入块 I/O 结束的时间，单位是时钟周期。
+
+```shell
+$ iotop
+Total DISK READ :       0.00 B/s | Total DISK WRITE :       7.85 K/s 
+Actual DISK READ:       0.00 B/s | Actual DISK WRITE:       0.00 B/s 
+  TID  PRIO  USER     DISK READ  DISK WRITE  SWAPIN     IO>       COMMAND 
+15055  be/3  root     0.00 B/s    7.85 K/s    0.00 %    0.00 %    [systemd-journald]
+```
+
+- iotop:按照 I/O 大小对进程排序
+  - 第1行：进程的磁盘读写大小总数
+  - 第2行：磁盘真实的读写大小总数（因为缓存、缓冲区、I/O 合并等因素的影响，它们可能并不相等）
+  - TID:线程 ID
+  - PRIO:I/O 优先级
+  - DISK READ:每秒读磁盘的大小
+  - DISK WRITE: 每秒写磁盘的大小
+  - SWAPIN: 换入 I/O 的时钟百分比
+  - IO>: 等待IO的时钟百分比
 
