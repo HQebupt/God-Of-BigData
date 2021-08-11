@@ -492,3 +492,112 @@ Actual DISK READ:       0.00 B/s | Actual DISK WRITE:       0.00 B/s
   - SWAPIN: 换入 I/O 的时钟百分比
   - IO>: 等待IO的时钟百分比
 
+### 案例分析
+
+如何观察系统有没有性能问题， 哪些资源是瓶颈？CPU、内存和磁盘 I/O 等
+
+- 套路：
+
+  -  top ，观察 CPU 和内存的使用
+  -  iostat ，观察磁盘的 I/O 
+
+- top 观察 CPU 和内存的使用
+
+  ```bash
+  # 按 1 切换到每个 CPU 的使用情况 
+  $ top 
+  top - 14:43:43 up 1 day,  1:39,  2 users,  load average: 2.48, 1.09, 0.63 
+  Tasks: 130 total,   2 running,  74 sleeping,   0 stopped,   0 zombie 
+  %Cpu0  :  0.7 us,  6.0 sy,  0.0 ni,  0.7 id, 92.7 wa,  0.0 hi,  0.0 si,  0.0 st 
+  %Cpu1  :  0.0 us,  0.3 sy,  0.0 ni, 92.3 id,  7.3 wa,  0.0 hi,  0.0 si,  0.0 st 
+  KiB Mem :  8169308 total,   747684 free,   741336 used,  6680288 buff/cache 
+  KiB Swap:        0 total,        0 free,        0 used.  7113124 avail Mem 
+   
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU %MEM     TIME+ COMMAND 
+  18940 root      20   0  656108 355740   5236 R   6.3  4.4   0:12.56 python 
+  1312 root      20   0  236532  24116   9648 S   0.3  0.3   9:29.80 python3 
+  ```
+
+  - CPU：CPU0 的使用率非常高，sys cpu为 6%，iowait 超过了 90%，说明CPU0 可能正在运行 I/O 密集型
+    - python 进程的 CPU 使用率已经达到了 6%， python进程可疑，待排查
+  - MEM: 总内存 8G，剩余内存只有 730 MB，而 Buffer/Cache 占用内存高达 6GB 之多，说明内存被缓存占用（如何了解缓存被谁用了）
+
+- iostat观察磁盘的 I/O 
+
+  <img src="1Linux性能优化.assets/image-20210811213928805.png" alt="image-20210811213928805" style="zoom:50%;" />
+
+  <img src="1Linux性能优化.assets/image-20210811213953598.png" alt="image-20210811213953598" style="zoom:50%;" />
+	- 磁盘 sda 的 I/O 使用率(%util)已经高达 99%
+	- 每秒写磁盘请求数是 64 ，写大小是 32 MB，写请求的响应时间为 7 秒，而请求队列长度则达到了 1100。
+	- 说明，sda磁盘严重性能瓶颈，CPU方面的 iowait 高达 90% 了，正是磁盘 sda 的 I/O 瓶颈导致的。
+
+- pidstat 寻找 I/O 请求相关进程
+
+  ```bash
+  $ pidstat -d 1 # pidstat 加上 -d 参数，就可以显示每个进程的 I/O 情况。
+   
+  15:08:35      UID       PID   kB_rd/s   kB_wr/s kB_ccwr/s iodelay  Command 
+  15:08:36        0     18940      0.00  45816.00      0.00      96  python 
+   
+  15:08:36      UID       PID   kB_rd/s   kB_wr/s kB_ccwr/s iodelay  Command 
+  15:08:37        0       354      0.00      0.00      0.00     350  jbd2/sda1-8 
+  15:08:37        0     18940      0.00  46000.00      0.00      96  python 
+  15:08:37        0     20065      0.00      0.00      0.00    1503  kworker/u4:2 
+  ```
+
+  - python进程每秒写的数据超过 45 MB，比上面 iostat 发现的 32MB 的结果还要大
+
+- python 进程到底在写什么？strace
+
+  - 读写文件必须通过系统调用完成。
+
+  ```bash
+  $ strace -p 18940 # 通过 -p 18940 指定 python 进程的 PID 号
+  strace: Process 18940 attached 
+  ...
+  mmap(NULL, 314576896, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f0f7aee9000 
+  mmap(NULL, 314576896, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f0f682e8000 
+  write(3, "2018-12-05 15:23:01,709 - __main"..., 314572844 
+  ) = 314572844 
+  munmap(0x7f0f682e8000, 314576896)       = 0 
+  write(3, "\n", 1)                       = 1 
+  munmap(0x7f0f7aee9000, 314576896)       = 0 
+  close(3)                                = 0 
+  stat("/tmp/logtest.txt.1", {st_mode=S_IFREG|0644, st_size=943718535, ...}) = 0 
+  ```
+
+  - 从 write() 系统调用上，进程向文件描述符编号为 3 的文件中，写入了 314572844 bytes (300MB) 的数据。
+  - stat() 调用，正在获取 /tmp/logtest.txt.1 的状态
+
+-  lsof 用来查看进程打开文件列表，包括了目录、块设备、动态库、网络套接字等。
+
+  ```bash
+  $ lsof -p 18940 
+  COMMAND   PID USER   FD   TYPE DEVICE  SIZE/OFF    NODE NAME 
+  python  18940 root  cwd    DIR   0,50      4096 1549389 / 
+  python  18940 root  rtd    DIR   0,50      4096 1549389 / 
+  … 
+  python  18940 root    2u   CHR  136,0       0t0       3 /dev/pts/0 
+  python  18940 root    3w   REG    8,1 117944320     303 /tmp/logtest.txt 
+  
+  ```
+
+  - FD 表示文件描述符号
+  - TYPE 表示文件类型
+  - NAME 表示文件路径
+  - 进程打开了文件 `/tmp/logtest.txt`，并且它的文件描述符是 3 号，而 3 后面的 w ，表示以写的方式打开。
+
+  > 综合strace的结果来看，进程 18940 以每次 300MB 的速度写日志，而日志文件是 /tmp/logtest.txt。
+
+- 解决方案：分析程序为什么会打大的日志？
+
+  - 生产系统的应用程序，应该有动态调整日志级别的功能
+  - 发送日志级别更改信号：`kill -SIGUSR2 18940 `
+
+  ```python
+  signal.signal(signal.SIGUSR1, set_logging_info) 
+  signal.signal(signal.SIGUSR2, set_logging_warning) 
+  ```
+
+  - 最后，再次验证系统是否正常。
+
