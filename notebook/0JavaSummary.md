@@ -3149,60 +3149,60 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 
 ### 原理
 
-- 高性能、高吞吐、低延时、速度快的原因
+####  高性能、高吞吐、低延时、速度快的原因
 
-  - 磁盘顺序读写
+- 磁盘顺序读写
 
-  - Page Cache，避免Object消耗，避免GC
+- Page Cache，避免Object消耗，避免GC
 
-  - 零拷贝
+- 零拷贝
 
-    - 生产者是`mmap+write `,写入到页缓存，页缓存映射文件
-    - 消费者或者Follower: sendfile，数据从Page Cache 直接发送到网络
+  - 生产者是`mmap+write `,写入到页缓存，页缓存映射文件
+  - 消费者或者Follower: sendfile，数据从Page Cache 直接发送到网络
 
-  - Partition+LogSegment+二分查找索引，二进制格式文件: partition文件夹、LogSegment文件、多种索引
+- Partition+LogSegment+二分查找索引，二进制格式文件: partition文件夹、LogSegment文件、多种索引
 
-  - 批量读写、批量压缩减少网络IO
+- 批量读写、批量压缩减少网络IO
 
-    
-
-- Zero Copy
   
-  - Kafka: 生产者是`mmap+write`, 消费者或者Follow同步消息是`sendfile`
-  - 基于 mmap 的索引
-  - 日志文件读写TransportLayer， FileChannel 的 transferTo方法，操作系统的sendfile 
-  - 压缩和解压缩会丧失zero-copy的特性么？会
-    - 写消息，解压缩校验
-    - 读消息。可以sendfile
 
-* 一致性怎么保证的？不支持读写分离
+#### Zero Copy
 
-  * 避免不一致性
-  * 场景不适用，分离适用读负载很大
-  * 同步机制，Follower存在落后Leader的时间窗口，若Follower可读，须容忍消息滞后
+- Kafka: 生产者是`mmap+write`, 消费者或者Follow同步消息是`sendfile`
+- 基于 mmap 的索引
+- 日志文件读写TransportLayer， FileChannel 的 transferTo方法，操作系统的sendfile 
+- 压缩和解压缩会丧失zero-copy的特性么？会
+  - 写消息，解压缩校验
+  - 读消息。可以sendfile
+
+#### 一致性怎么保证的？不支持读写分离
+
+* 避免不一致性
+* 场景不适用，分离适用读负载很大
+* 同步机制，Follower存在落后Leader的时间窗口，若Follower可读，须容忍消息滞后
+
+#### 网络分区如何解决，分情况
+
+* 单个 Broker 隔离
+
+  * Controller自动移除它，一致性C保证
+
+* Broker间不通
+
+  * 副本备份出问题，ISR被收缩，一致性C保证
+
+* 所有Broker 与 ZooKeeper 不通
+
+  * Broker进入Zoobie，一致性bug，解决方法： **fencing**，比如 Leader Epoch
+
+* **某个Broker 与 Controller 不通**
+
+  * **元数据不一致**，无法感知到。因为Broker 是否活着完全是交由 ZooKeeper 。一旦某个 Broker 与 ZooKeeper 可通信，集群认为是正常的。（raft可以解决）
+  * 解决方法：强制Controller重选举
+  * 需考虑的问题：加载ZK的元数据很慢，200W的partition需要2分钟。
+  * 怎么解决性能问题？参考：移除Zookeeper
+
   
-* **网络分区如何解决，分情况**
-
-  * 单个 Broker 隔离
-
-    * Controller自动移除它，一致性C保证
-
-  * Broker间不通
-
-    * 副本备份出问题，ISR被收缩，一致性C保证
-
-  * 所有Broker 与 ZooKeeper 不通
-
-    * Broker进入Zoobie，一致性bug，解决方法： **fencing**，比如 Leader Epoch
-
-  * **某个Broker 与 Controller 不通**
-
-    * **元数据不一致**，无法感知到。因为Broker 是否活着完全是交由 ZooKeeper 。一旦某个 Broker 与 ZooKeeper 可通信，集群认为是正常的。（raft可以解决）
-    * 解决方法：强制Controller重选举
-    * 需考虑的问题：加载ZK的元数据很慢，200W的partition需要2分钟。
-    * 怎么解决性能问题？参考：移除Zookeeper
-
-    
 
 ### 调优
 
