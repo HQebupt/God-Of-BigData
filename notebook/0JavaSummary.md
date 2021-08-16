@@ -254,7 +254,7 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
     }
 ```
 
-- get操作：比较简单，就是用key的hash值去命中Node。没有加锁，使用volatile来保证可见性。这就是所谓的弱一致性。
+- get操作：比较简单，就是用key的hash值去命中Node。没有加锁，使用volatile (修饰table的) 来保证可见性。这就是所谓的弱一致性。
 
 ```java
     public V get(Object key) {
@@ -324,7 +324,7 @@ final V putVal(K key, V value, boolean onlyIfAbsent) {
 
 #### 适用场景
 
-ConcurrentHashMap: 数组+链表+红黑树+锁。红黑树在并发的情况下，删除和插入过程中，需要平衡，会操作大量的节点，因此竞争所资源激烈，代价相对于跳表高。
+ConcurrentHashMap: 数组+链表+红黑树+锁。红黑树在并发的情况下，删除和插入过程中，需要平衡，会操作大量的节点，因此竞争锁资源激烈，代价相对于跳表高。
 
 > 因此，在单线程Map容器中，TreeMap容易来存取大数据量；线程安全的case下，SkipListMap来存大数据。
 
@@ -1240,7 +1240,7 @@ PhantomReference pr = new PhantomReference(str, queue);
 
 - 双亲委派模型：
 
-  - 委托给父类加载器加载，防治内存中同一个对象出现多次。
+  - 委托给父类加载器加载，防止内存中同一个对象出现多次。
   - <img src="0JavaSummary.assets/image-20210712084136084.png" alt="image-20210712084136084" style="zoom: 50%;" />
   - BootStrap ClassLoader，加载/JAVA_HOME/lib下的类库，或-Xbootclasspath指定的路径且能被JVM识别的类库
   - Extension ClassLoader，加载/JAVA_HOME/lib/ext下的类库，或java.ext.dirs系统变量指定路径下的类库
@@ -1418,7 +1418,7 @@ PhantomReference pr = new PhantomReference(str, queue);
   - 垃圾回收频率
 -  降低 Minor GC 频率
   - 短对象多，扩容 Eden
-  - 多对象多，谨慎扩容
+  - 长对象多，谨慎扩容
 
 - 单次停顿过长
   - Xmx、Xms
