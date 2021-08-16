@@ -3824,7 +3824,7 @@ public abstract long transferTo(long position, long count, WritableByteChannel t
   - 目标使用率80%，核心业务：60%
 - 实施
   - 分析内存资源浪费原因
-    - 用户原因：用户申请的内存资源不合理（主要原因）
+    - 用户原因：用户申请的内存资源不合理，1.5倍活跃对象的大小（主要原因）
     - OLS本身不在增加内存。
     - Yarn程度的Memory浪费(次要原因)
   - 解决：
