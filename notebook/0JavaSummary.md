@@ -330,6 +330,9 @@ ConcurrentHashMap: 数组+链表+红黑树+锁。红黑树在并发的情况下�
 
 ![image-20210719222931125](0JavaSummary.assets/image-20210719222931125.png)
 
+- ConcurrentHashMap的弱一致性问题详细
+  - ConcurrentHashMap中的迭代器主要包括entrySet、keySet、values方法。。在遍历过程中，如果已经遍历的数组上的内容变化了，迭代器不会抛出ConcurrentModificationException异常。如果未遍历的数组上的内容发生了变化，则有可能反映到迭代过程中。这就是ConcurrentHashMap迭代器弱一致的表现。
+
 1. HashMap 底层设计与实现，LoadFactor，为什么多线程环境下，put方法会造成死循环？为什么size>=8 之后，要转换成红黑树？红黑树能手写一个么？
 2. HashTable \ ConcurrectHashMap分别对应什么样的适用场景？
 3. ConcurrentHashMap 1.8之前是segment lock, 之后使用synchronized和CAS来更新，为什么？涉及1.6之后，对synchronized的优化，重量级锁、偏向锁、自旋锁
@@ -3710,9 +3713,16 @@ Java进程发起Read/Write请求加载数据的大致流程：底层调用Linux 
 4. DMA控制器根据文件描述符和数据长度，使用scatter/gather把数据从内核缓冲区拷贝到网卡
 5. `sendfile()`调用返回，上下文从内核态切换回用户态
 
+| 方式       | 优点                                                         | 缺点                                                         |
+| ---------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| mmap+write | 即使频繁调用，使用小块文件传输，效率也很高                   | 不能很好的利用 DMA 方式，会比 sendfile 多消耗 CPU，内存安全性控制复杂，需要避免 JVM Crash 问题。 |
+| sendfile   | 利用 DMA 方式，消耗 CPU 较少，大块文件传输效率高，无内存安全新问题。 | 小块文件效率低于 mmap 方式，只能是 BIO 方式传输，不能使用 NIO。 |
+
+
+
 #### 中间件的应用
 
-- RocketMQ：生产者和消费者都是`mmap+write`
+- RocketMQ：生产者和消费者都是`mmap+write` (因为有小块数据传输的需求，效果会比 sendfile 更好。TODO：依据在哪里？)
 - Kafka: 生产者是`mmap+write`, 消费者或者Follow同步消息是`sendfile`
 - Netty：
 
