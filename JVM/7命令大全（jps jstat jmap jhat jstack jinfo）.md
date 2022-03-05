@@ -253,6 +253,40 @@ histo : 显示堆中对象的统计信息
 permstat : to print permanent generation statistics
 F : 当-dump没有响应时，强制生成dump快照
 
+> MAT linux机器可以分析：https://www.cnblogs.com/hellxz/p/use_mat_linux_command_line_generate_reports.html
+>
+> ./ParseHeapDump.sh \
+>     /home/xiaoju/qiang/java_pid944.hprof  \
+>     org.eclipse.mat.api:suspects \
+>     org.eclipse.mat.api:overview \
+>     org.eclipse.mat.api:top_components
+
+**强制dump**
+
+http://greenteajug.cn/2016/04/21/获取一直fullgc下的java进程heapdump的小技巧/
+
+- 找到java进程，gdb attach上去， 例如 `gdb java -p 22443`
+
+- 找到这个
+
+  ```
+  HeapDumpBeforeFullGC
+  ```
+
+  的地址（这个flag如果为true，会在FullGC之前做HeapDump，默认是false）
+
+  ```
+  (gdb) p &HeapDumpBeforeFullGC
+  $2 = (<data variable, no debug info> *) 0x7f7d50fc660f <HeapDumpBeforeFullGC>
+  ```
+
+- 然后把他设置为true，这样下次FGC之前就会生成一份core文件
+
+  ```
+  (gdb) set *0x7f7d50fc660f = 1
+  (gdb) quit
+  ```
+
 
 
 - -dump
@@ -371,6 +405,36 @@ Z  boolean
 - -F
   强制模式。如果指定的pid没有响应，请使用jmap -dump或jmap -histo选项。此模式下，不支持live子选项。
 
+当dump无法处理正在FullGC的java应用时，可以使用下面的方法dump出。
+
+### 操作流程
+
+- 找到java进程，gdb attach上去， 例如 `gdb java -p 22443`
+
+- 找到这个
+
+  ```
+  HeapDumpBeforeFullGC
+  ```
+
+  的地址（这个flag如果为true，会在FullGC之前做HeapDump，默认是false）
+
+  ```
+  (gdb) p &HeapDumpBeforeFullGC
+  $2 = (<data variable, no debug info> *) 0x7f7d50fc660f <HeapDumpBeforeFullGC>
+  ```
+
+- 然后把他设置为true，这样下次FGC之前就会生成一份core文件
+
+  ```
+  (gdb) set *0x7f7d50fc660f = 1
+  (gdb) quit
+  ```
+
+- 最后，等一会，等下次FullGC触发，你就有HeapDump了！
+
+(PS. `jstat -gcutil pid` 可以查看gc的概况)
+
 #### 5 jhat
 jhat(JVM Heap Analysis Tool)命令是与jmap搭配使用，用来分析jmap生成的dump，jhat内置了一个微型的HTTP/HTML服务器，生成dump的分析结果后，可以在浏览器中查看。
 
@@ -458,6 +522,29 @@ option参数
 > TIMED_WATING,有时限的等待另一个线程的特定操作。
 >
 > TERMINATED,已退出的。
+
+
+
+- tid: java内的线程id
+- nid: 操作系统级别线程的线程id
+- prio: java内定义的线程的优先级
+- os_prio:操作系统级别的优先级
+- Elapsed Time = Cpu Time + Wait Time
+
+CPU Time 指的是CPU在忙于执行当前任务的时间，其并没有考虑等待时间，如IO等待，网络等待等，而Elapsed Time 则是执行当前任务所花费的总时间，也就是说这两者的关系统可以表示为：`Elapsed Time = Cpu Time + Wait Time` 但是在多核处理器的情况下，由于多个CPU同时处理任务所以可能会出现Cpu Time 大于Elapsed Time 的情况
+
+- CPU Time：对于单线程程序来说，CPU TIME指的是该线程在一个逻辑处理器（单核）上所花费的时间总量；对于多线程程序来说，CPU TIME指的是所有线程的CPU TIME之和；应用程序的CPU时间指的是该程序所有线程的CPU TIME之和。
+- Wait Time：特定线程等待一定事件发生的时间，这些事件可以是同步等待，I/O等待。
+- Elapsed time:该程序运行的平台时间，即：应用程序结束的时刻-应用程序起始时刻。
+
+**调用修饰**
+
+表示线程在方法调用时,额外的重要的操作。线程Dump分析的重要信息。修饰上方的方法调用。
+
+- locked <地址> 目标：使用synchronized申请对象锁成功,监视器的拥有者。
+- waiting to lock <地址> 目标：使用synchronized申请对象锁未成功,在迚入区等待。
+- waiting on <地址> 目标：使用synchronized申请对象锁成功后,释放锁幵在等待区等待。
+- parking to wait for <地址> 目标 ：需与堆栈中的"parking to wait for (atjava.util.concurrent.SynchronousQueue$TransferStack)"结合来看。first–>此线程是在等待某个条件的发生，来把自己唤醒，second–>SynchronousQueue不是一个队列，其是线程之间移交信息的机制，当我们把一个元素放入到 SynchronousQueue 中时必须有另一个线程正在等待接受移交的任务，因此这就是本线程在等待的条件。
 
 示例
 

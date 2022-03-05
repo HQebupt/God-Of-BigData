@@ -342,7 +342,9 @@ ConcurrentHashMap: 数组+链表+红黑树+锁。红黑树在并发的情况下�
 
 ### 跳表
 
-优化搜索的有序链表
+优化搜索的有序链表。
+
+Java的跳表实现，因为排序，所以比较、判断是否contains都是基于Comparor或者元素本身是可比较的。
 
 ### CopyOnWriteArrayList
 
