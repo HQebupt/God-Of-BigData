@@ -1,3 +1,31 @@
+## 0 指标
+
+**dmesg cgroup kill的指标含义：**
+
+- total-vm: the size of the virtual memory, 虚拟内存的大小：40G
+  - Part of it is really mapped into the RAM itself (allocated and used). This is "RSS".
+
+- anon-rss: 14G
+  - Part of the RSS is allocated in real memory blocks (other than mapped into a file or device). This is anonymous memory ("anon-rss") and there is also RSS memory blocks that are mapped into devices and files ("file-rss").
+
+- file-rss: 10M
+
+
+
+打开一个巨大的文件，file-rss会很高
+
+使用malloc() 分配了内存，而且真正使用了，anon-rss会很高
+
+使用malloc() 分配了内存，但是没有使用，total-vm会很高，但是rss会很低。
+
+ 
+
+> So, if you open a huge file in vim, the file-rss would be high, on the other side, if you malloc() a lot of memory and really use it, your anon-rss would be high also.
+
+> On the other side, if you allocate a lot of space (with malloc()), but nevers use it, the total-vm would be higher, but no real memory would be used (due to the memory overcommit), so, the rss values would be low.
+>
+> [what does anon-rss and total-vm mean](https://stackoverflow.com/questions/18845857/what-does-anon-rss-and-total-vm-mean)
+
 ## 1平均负载
 
 平均负载是指单位时间内，系统处于**可运行状态**和**不可中断状态**的平均进程数（**平均活跃进程数**）

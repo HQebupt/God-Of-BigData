@@ -285,7 +285,7 @@ Netty的IO线程`NioEventLoop`由于聚合了多路复用器Selector，可以同
 
 ![img](1IO模型.assets/47f4427f8820af163ca9cd1f545bf2c9.jpg)
 
-<img src="1IO模型.assets/aHR0cHM6Ly91c2VyLWdvbGQtY2RuLnhpdHUuaW8vMjAxOC8xMS8xLzE2NmNjYmJkYzlhN2NhYmU" alt="服务端Netty Reactor工作架构图" style="zoom: 67%;" />
+<img src="1IO模型.assets/image.png" alt="img" style="zoom: 33%;" />
 
 - NioEventLoopGroup：主要管理EventLoop的生命周期，可以理解为一个线程池，内部维护了一组线程，每个线程(NioEventLoop)负责处理多个Channel上的事件，而一个Channel只对应于一个线程。（NioEventLoopGroup是 Netty 对线程池的一种实现，可更高效地进行多线程处理、并发、控制流）
 
