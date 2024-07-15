@@ -1156,6 +1156,25 @@ public class Semaphore implements java.io.Serializable {
 - ReentrantLock，轻量级，不切换线程，cas+volatile，选择公平，选择中断，Condition等待队列
   - 适用场景：时间锁、可中断锁、多个条件变量
 
+### 9 反射
+
+（Reflection）机制是允许在运行时动态地创建类、操作类的机制。
+
+优点
+
+1. **动态操作**：可以在运行时动态地创建对象、调用方法和访问字段，不需要提前知道类的结构。
+2. **灵活应用**：适用于需要高度灵活性和动态性的场景，如框架和工具开发。
+
+缺点
+
+1. **性能开销**：反射操作速度较慢，会影响程序性能。
+2. **安全风险**：可能绕过访问控制机制，带来安全隐患。
+3. **代码复杂**：代码难以理解和维护，增加调试和维护的难度。
+
+反射在框架开发中很常见，如 Spring 框架利用反射来实现依赖注入和面向切面的功能。
+
+反射在工具开发中也很有用，比如在 IDE 中通过反射获取类的信息，提供代码补全和错误提示功能。
+
 ## 3 JVM
 
 <img src="0JavaSummary.assets/image-20210712082721625.png" alt="image-20210712082721625" style="zoom: 33%;" />
@@ -1169,7 +1188,7 @@ public class Semaphore implements java.io.Serializable {
 - 弱引用:不是立刻回收而是GC发现后会在下次GC时才会回收对象。（场景：如果对象偶尔使用可WeakReference.）
 - 虚引用: 主要用来跟踪对象被垃圾回收的活动。必须和引用队列(ReferenceQueue)联合使用,本次GC发现立即回收对象（场景：GC里面使用？）
 
-StrongReference、WeakReference、SoftReference、PhantomReference
+StrongReference、SoftReference、WeakReference、PhantomReference
 
 - SoftReference  空间不足才会回收对象（场景：适合缓存）
 
@@ -1249,8 +1268,22 @@ PhantomReference pr = new PhantomReference(str, queue);
   - <img src="0JavaSummary.assets/image-20210712084136084.png" alt="image-20210712084136084" style="zoom: 50%;" />
   - BootStrap ClassLoader，加载/JAVA_HOME/lib下的类库，或-Xbootclasspath指定的路径且能被JVM识别的类库
   - Extension ClassLoader，加载/JAVA_HOME/lib/ext下的类库，或java.ext.dirs系统变量指定路径下的类库
-  - Application ClassLoader，加载用户类路径上（classpath）的指定类库
+  - Application ClassLoader，加载用户类路径上（classpath）的指定类库，全局唯一一个，单例
   - 类加载器的作用：判断是类是否相等
+
+
+
+**热更新（HotSwap）**
+
+Java中的HotSwap机制允许在运行时替换类的实现，而无需重新启动JVM。
+
+主要原理：
+
+* 通过新的类加载器加载新的类，将新类替换旧类的引用，从而实现类的热更新，而不是直接替换已有的类。
+
+* 通过GC机制，回收旧类，因为没有引用
+
+> 自定义类加载器能够绕过父类加载器加载相同名称的类，这打破了双亲委派机制下类加载的唯一性和稳定性。
 
 ### Card Table
 
@@ -1350,11 +1383,43 @@ PhantomReference pr = new PhantomReference(str, queue);
 
 #### G1
 
-标记-整理，局部（两个 Region 之间）“复制”，无内存空间碎片。
+G1JDK 7中引入，JDK 8中完善。相比于CMS，提供规整的Region内存，实现可预测的停顿时间，将垃圾回收时间控制在N毫秒内。
 
-- 几个重要的数据结构：
-  - Region、CSet（CollectionSet）多个 Region 构成回收集
-  - G1 Remembered Set：记录本Region中所有对象引用的对象所在的区域（我指向谁，谁指向我），防止全堆扫描
+* 内存划分
+
+  * Region，每个Region的大小为1-32M，逻辑上划分为Eden、Survivor和老年代。还有一种特殊的Humongous区用于存放大对象。
+
+* 回收过程：
+
+  * 同时回收新生代和老年代，分别称为Young GC模式和Mixed GC模式。
+  * 在合适时机选择合适的Region进行回收
+  * 核心过程：标记-整理，局部（两个 Region 之间）“复制”，无内存空间碎片。
+
+* Mixed GC过程：
+
+  * 包括全局并发标记（global concurrent marking）和拷贝存活对象（evacuation）。
+  * 全局并发标记分为初始标记、并发标记、最终标记和筛选回收
+
+  
+
+* 三色标记算法
+
+  * 解决什么问题：标记清除算法，存在长时间暂停
+  * 做什么：用于可达性分析，将对象标记为白色（未检查）、灰色（已检查但子对象未检查）和黑色（已检查完毕）。
+  * 通过SATB和增量更新机制解决三色标记算法的缺陷（缺点：漏标）
+
+* G1优点
+  
+  * 包括可预测的停顿时间和高吞吐量；缺点是额外结构带来的内存开销
+
+
+
+
+
+几个重要的数据结构：
+
+- Region、CSet（CollectionSet）多个 Region 构成回收集
+- G1 Remembered Set：记录本Region中所有对象引用的对象所在的区域（我指向谁，谁指向我），防止全堆扫描
 
 ![image-20210712133452256](0JavaSummary.assets/image-20210712133452256.png)
 
@@ -1465,8 +1530,33 @@ PhantomReference pr = new PhantomReference(str, queue);
   - 最大支持 4T堆
 
 - 概述
-  - 内存分成一个个 page，清理压缩
+  - JDK17正式实现
+  - 将堆内存划分为多个Page，每个Page大小不固定，分为小型Page（2M），中型Page（32M）和大型Page（4M以上，2M的整数倍）。
+  - 清理压缩
   - 直接利用对象的引用指针，用来标识对象的状态
+
+* 工作流程
+
+  - **初始标记（Init Mark）**：标记从GC Roots可达的对象，并切换视图。
+  - **并发标记（Concurrent Mark）**：并发标记对象，更新染色指针。
+  - **重新标记（Remark）**：处理并发标记阶段未完成的任务，解决三色标记法中的漏标问题。
+  - **并发预备重分配（Concurrent Prepare for Relocate）**：处理软引用、弱引用、虚引用对象，初始化前向表，记录待回收的Page信息。
+  - **初始迁移（Relocate Start）**：标记GC Roots直接可达的对象，切换视图，并修正引用。
+  - **并发迁移（Concurrent Relocate）**：遍历Page，根据前向表复制存活对象并更新引用。
+  - **并发重映射（Concurrent Remap）**：修正迁移后对象的引用，推迟到下一轮GC并发标记阶段完成。
+* 染色指针
+  
+  * 通过在64位指针中使用高位位来存储对象状态信息，例如标记、重映射和可终结标记，从而减少额外的元数据开销。
+* ZGC的读屏障有什么作用？
+	
+* 是一段在对象引用读取时插入的代码，用于辅助并发垃圾回收过程中对象引用的自愈，即更新引用指向已移动的对象的新地址。
+	
+* ZGC有哪些优缺点？
+	* 优点是几乎全程并发的回收过程，极低的停顿时间，非常适合高并发应用。
+	* 缺点是由于染色指针和读屏障的使用，可能会对吞吐量有一些影响。
+	
+	参考 [g1微信文章](https://mp.weixin.qq.com/s/Ywj3XMws0IIK-kiUllN87Q)
+
 
 ## 4 分布式协议
 
@@ -2972,6 +3062,7 @@ int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] va
 ### Offset
 
 - 自动提交：默认5s，Consumer后台启动1个线程提交位移。逻辑上来讲，poll先提交上一批次的offset，在拉取数据。
+  
   - Rebalance会出现消费重复，5s提交，但是3s出现Rebalance
 - 手动提交有3种
   - 同步commitSync() 直接阻塞，直到成功。
@@ -3121,6 +3212,7 @@ consumer 是单线程。1个是消费主线程，1个是心跳线程。
 ### 移除Zookeeper
 
 - 作用
+  
   - 元数据管理、成员管理、Controller 选举。
   
 - 为什么（2.8，KIP-500 移除zk）
@@ -3397,9 +3489,11 @@ val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
 ### 实际操作
 
 - 监控 Kafka
+  
   - Kafka Manager、Kafka Monitor、JMX 监控、JMXTool
   
 - Broker 的 Heap Size 如何设置
+  
   - 稳定后，手动触发(jmap)Full GC，存活对象的 1.5~2 倍。 6GB。
   
 - 估算 Kafka 集群的机器数量？
@@ -3421,37 +3515,6 @@ val builder = fetchSessionHandler.newBuilder(partitionMap.size, false)
   ```
 
 
-### Pulsar
-
-- 与Kafka的不同：存储计算分离
-
-  - Broker Stateless，无状态
-    - Broker与分区对应是动态调整的
-  - ZK存储元数据，和Kafka一样
-  - Bookeeper，分布式存储集群，存储消息
-    - Ledger，是Write Ahead Log，类似于Segment，但是是一次性写入（解决并发写入控制，不需要分布式锁，不需要损失性能）
-
-- <img src="0JavaSummary.assets/image-20210723104938142.png" alt="image-20210723104938142" style="zoom: 80%;" />
-
-- 客户端如何读写消息
-
-  - 连接Service Discovery，获取分区与Broker的元数据信息
-  - 连接对应的Broker
-
-- 存储分离优点
-
-  - 复杂度降低
-  - 计算节点无状态，扩展、故障转移快
-  - 计算节点：只关注业务逻辑，调度灵活
-  - 存储节点：只关注存储
-
-- 存储分离缺点
-
-  - BookKeeper 依然要解决数据一致性、节点故障转移、选举、数据复制等等这些问题
-  - 单集群变多集群，运维复杂
-  - 性能损失，比如消费一条消息，Broker需要从Bookeeper读取，多了网络IO和内存拷贝
-
-  
 
 ## Linux 
 
@@ -3798,6 +3861,15 @@ public abstract long transferTo(long position, long count, WritableByteChannel t
   - 反压线程将反压信息写到 Zookeeper
   - Zookeeper 上的 watch 会通知该拓扑（topo）的所有 Worker，该拓扑出现反压
   - Spout 减缓发送 tuple 的速率
+
+## 问题排查
+
+- GC问题排查
+- 内存泄露排查
+- 线程泄露排查
+- 高CPU占用排查
+
+###  
 
 ## 项目
 
